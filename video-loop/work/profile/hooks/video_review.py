@@ -9,7 +9,7 @@ import time
 
 from video_evidence import HERMES, atomic_json, digest, identity, read_json, run
 
-REVIEW_POLICY = 'ninax-review-3.1'
+REVIEW_POLICY = 'ninax-review-3.2'
 NOTICE = '這次補查後，仍沒有足夠且通過核對的資訊可回傳可靠摘要；已保留查詢進度與缺漏。'
 MISSING_SOURCE_NOTICE = '目前無法確認要補查哪一支影片，請再貼一次影片連結。'
 GAPS = {'source_identity_unverified': '影片來源尚未確認', 'duration_unknown': '片長未知',
@@ -98,8 +98,9 @@ def status_notice(source=None,gaps=(),progress=None):
     missing = list(dict.fromkeys(GAPS[g] for g in gaps if g in GAPS))
     if missing:
         text += '\n目前缺少或待確認：'+'、'.join(missing)+'。'
-    if progress and progress.get('completed',0)<progress.get('total',0):
-        text += f"\n已核對 {int(progress['completed'])}/{int(progress['total'])} 段，進度已保存；回覆「繼續摘要」可接續處理。"
+    if progress and (progress.get('completed',0)<progress.get('total',0) or progress.get('integration_pending')):
+        pending='最後整合檢核尚未完成，' if progress.get('integration_pending') else ''
+        text += f"\n已核對 {int(progress['completed'])}/{int(progress['total'])} 段，{pending}進度已保存；回覆「繼續摘要」可接續處理。"
     url = identity((source or {}).get('url',''))
     if url:
         text += '\n來源：'+url['url']
@@ -200,7 +201,10 @@ def checklist(evidence, question, deadline, ledger):
                  '若為空，表示此段沒有片尾責任，不新增本段結尾或推測全片結局，'
                  '並引用其中的 E 編號；不能只整理最後一句語音而漏掉視覺結尾。'
                  'description 直接寫成給讀者看的重點短句，不寫「應說明／需涵蓋」等命令，程式會據此組成摘要。'
-                 '對未標說話者的語音，直接寫「對話中提到／詢問／回應」，不指定男子或對方說了哪句。'
+                 'description 不自行添加影片時間標籤或片段起訖範圍；程式會依引用的 E 編號產生精確時間。'
+                 '影片內容本身提到的時間、日期、數字及百分比仍須保留。'
+                 '對未標說話者的語音，寫「語音中提到」，不指定男子或對方說了哪句；'
+                 '只有證據明確顯示互相交談時才稱為對話，不自行把旁白改成對話。'
                  '不補「看到後／為了／因此想要」等沒有來源支持的原因或意圖；保留語意不明的限制。'
                  '比喻優先保留原本的短句或具體行為，不直接改寫成未明說的心理狀態。'
                  '未標時間的短小音訊文字不把逐字內容列為必涵蓋；不要把配樂歌詞當敘事台詞。'
@@ -258,6 +262,7 @@ def audit_candidate(evidence, requirements, messages, question, deadline, second
                '但不可把上一輪通過的概括程度任意改成逐鏡描述標準。'
                '畫面猜測不得寫成確定；歌曲音樂不得辨識成未有證據的名稱、作者。'
                '被截斷、漏重點、無依據或來源混用都不可 pass。'
+               'coverage 對每個 must_cover 的實際 id 分別回傳一列；不得合併、改名或用範圍縮寫 id。'
                '回傳 {"status":"pass|revise|blocked","coverage":[{"id":"M1",'
                '"status":"covered|missing","summary_quote":"逐字摘取10至60字連續原文，不得用省略號縮寫",'
                '"evidence_ids":["E1"]}],"unsupported":[],"omitted_evidence":[],"contradictions":[], '
@@ -406,7 +411,7 @@ def review_all(evidence, question, deadline, ledger, job):
         cache=root/(key+'.json')
         result=read_json(cache)
         if result.get('audit',{}).get('status')!='pass':
-            if deadline-time.monotonic()<100:
+            if deadline-time.monotonic()<165:
                 break
             section_question=(f'這是第 {index+1}/{len(sections)} 段的局部審稿。只整理本段已提供的內容；'
                 '其他分段已另行提供，最後會整合全片。不要要求補取其他段落、後續重點或全片片尾；'
@@ -445,8 +450,8 @@ def review_all(evidence, question, deadline, ledger, job):
     actual=''.join(x.get('text','') for x in messages)
     if any(''.join(x.get('text','') for x in payload(body)) not in actual for body in bodies):
         return {'text':NOTICE,'audit':{'status':'blocked','reason':'line_payload_limit'},'must_cover':requirements,'progress':progress}
-    cited={key for item in requirements for key in item['evidence_ids']}
-    proof={**evidence,'items':[item for item in evidence['items'] if item['id'] in cited],
+    # Revisions can cite facts outside the initial checklist. The final audit needs those original facts too.
+    proof={**evidence,
            'scope':'每段已獨立讀過全部來源並通過審稿；此處檢核跨段矛盾、必涵蓋重點與最終訊息'}
     # ponytail: one final 60k-character integration; larger reports need an attachment delivery path.
     if len(json.dumps(proof,ensure_ascii=False))>60000 or len(requirements)>100:
@@ -454,11 +459,48 @@ def review_all(evidence, question, deadline, ledger, job):
     final_key=digest([text,proof,REVIEW_POLICY])
     final=read_json(root/(final_key+'.final.json'))
     if not final:
-        final=audit_candidate(proof,{'must_cover':requirements},messages,question,deadline,60,ledger)
+        try:
+            final=audit_candidate(proof,{'must_cover':requirements},messages,question,deadline,120,ledger)
+        except TimeoutError:
+            progress['integration_pending']=True
+            atomic_json(root/'progress.json',progress)
+            return {'text':NOTICE,'audit':{'status':'blocked','reason':'chunk_review_pending'},
+                    'must_cover':requirements,'progress':progress}
         atomic_json(root/(final_key+'.final.json'),final)
     requests=recovery_requests(final,evidence)
     passed=not requests and audit_ok(final,{'must_cover':requirements},messages,proof)
-    return {'text':text if passed else NOTICE,'audit':{'status':'pass' if passed else 'blocked','checks':[final],
+    checks=[final]
+    if not passed and not requests and final.get('status')=='revise':
+        try:
+            revision_path=root/(final_key+'.revision.json')
+            revised=read_json(revision_path)
+            if not revised:
+                if deadline-time.monotonic()<90:
+                    raise TimeoutError('integration_revision_budget')
+                changes=ask('只修整合審稿指出的矛盾或錯誤，其他文字保持不變。回傳 JSON：'
+                    '{"replacements":[{"old":"原稿中的唯一連續文字","new":"修正後的文字"}]}。'
+                    '選最小句子；不重寫整篇、不刪除分段或來源。依完整 evidence 修正，'
+                    '語音字詞不確定就明說，不猜測正字。新引用使用 [E編號]，時間由程式產生。',
+                    {'stage':'revision','evidence':proof,'previous':{'text':text},'audit':final},deadline,35,ledger)
+                revised={'text':render_citations(apply_revisions(text,changes),evidence)}
+                if not revised['text'] or len(revised['text'])>10000:
+                    raise ValueError('invalid_summary')
+                atomic_json(revision_path,revised)
+            text=revised['text'];messages=payload(text)
+            checked_path=root/(digest([final_key,text])+'.revised-final.json')
+            checked=read_json(checked_path)
+            if not checked:
+                checked=audit_candidate(proof,{'must_cover':requirements},messages,question,deadline,120,ledger,prior_audit=final)
+                atomic_json(checked_path,checked)
+            checks.append(checked)
+            requests=recovery_requests(checked,evidence)
+            passed=not requests and audit_ok(checked,{'must_cover':requirements},messages,proof)
+        except TimeoutError:
+            progress['integration_pending']=True
+            atomic_json(root/'progress.json',progress)
+            return {'text':NOTICE,'audit':{'status':'blocked','reason':'chunk_review_pending'},
+                    'must_cover':requirements,'progress':progress}
+    return {'text':text if passed else NOTICE,'audit':{'status':'pass' if passed else 'blocked','checks':checks,
             'method':'independent_sections_and_final_integration','sections':len(sections)},
             'must_cover':requirements,'progress':progress,'source_checks':requests}
 

@@ -1,0 +1,381 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-09-07T16:30:01.689046+00:00",
+  "goal_status": "in_progress",
+  "source_baseline_commit": "88d4366c73f7de5d6656238bf0f4e8298c641f10",
+  "policies": {
+    "audio": "ninax-audio-3.0",
+    "visual": "ninax-video-2.2",
+    "review": "ninax-review-3.2"
+  },
+  "components": [
+    {
+      "command": "check_goal.py",
+      "exit_code": 0,
+      "stdout": "{\"status\": \"PASS\", \"checks\": [\"target_binding\", \"whole_segment_repair\", \"no_duplicate_asr\", \"repair_then_reaudit\", \"visual_order_without_creator_claim\", \"durable_sections\", \"tail_preserved\", \"line_cap_fails_closed\", \"metrics_do_not_invent_cost\"]}\n",
+      "stderr": "",
+      "test_sha256": "e21e42c320598d69cda7e9ab32587bac26c649a1ce4bdd03835ea2b7ad79bb45"
+    },
+    {
+      "command": "check_install.py",
+      "exit_code": 0,
+      "stdout": "INSTALL_ROLLBACK_PASS: exact restoration, retained new files, drift refusal, interrupted apply\n",
+      "stderr": "",
+      "test_sha256": "fea655bbf4964ac574cf7d3b9de00a51b1538971a3756971eb5c030e2adc756e"
+    },
+    {
+      "command": "check_video.py",
+      "exit_code": 0,
+      "stdout": "{\"gate\": \"video-evidence-and-budget\", \"status\": \"PASS\", \"checks\": [\"caption_is_not_complete\", \"platform_and_case_identity\", \"ready_cache_no_calls\", \"timestamp_validation\", \"parallel_turn_ledgers\", \"audit_missing_claims\", \"source_alignment\", \"expired_url_replaced\", \"changed_media_invalidates_proof\", \"same_url_fetch_deduplicated\", \"resume_accepted_task_without_post\", \"nested_child_cleanup\"]}\n",
+      "stderr": "",
+      "test_sha256": "6703916cb8b44183ad7a59413cd270a4d8c3d93f66280fbcea539c82c509e676"
+    },
+    {
+      "command": "check_delivery.py",
+      "exit_code": 0,
+      "stdout": "{\"gate\": \"line-delivery-boundaries\", \"status\": \"PASS\", \"real_line_message_sent\": false, \"checks\": [\"no_preview\", \"correct_chat_and_turn\", \"owned_reply_token\", \"durable_no_duplicate\", \"no_retry_on_ambiguous_acceptance\", \"postback_cannot_bypass\", \"control_ack_preserved\"]}\n",
+      "stderr": "",
+      "test_sha256": "a6d3f53145fa55492221d8cca9a98d65ef84ad4b34cc9886fc79857a12f8bd5f"
+    }
+  ],
+  "native_gateway_tests": {
+    "exit_code": 0,
+    "seconds": 12.9,
+    "command": "bash scripts/run_tests.sh -j 2 tests/gateway/test_line_plugin.py tests/gateway/test_stream_final_contract.py tests/gateway/test_stream_final_adoption_gate.py /home/box/irisx-failover-restore/20260906/repair-20260907/goal-v3/test_custom_turn.py -q",
+    "passed": 46,
+    "failed": 0,
+    "scope": "fresh reconstructed pinned Hermes; unchanged generic gateway adapter",
+    "cwd": "/home/box/irisx-failover-restore/20260906/repair-20260907/goal-v3/rebuilt-runtime/hermes-agent",
+    "hermes_python": "/home/box/irisx-failover-restore/20260906/repair-20260907/goal-v3/rebuilt-runtime/hermes-agent/venv/bin/python"
+  },
+  "windows_pipeline_self_check": {
+    "command": "python -B video-loop/vendor/video-pipeline/pipeline.py --self-test",
+    "exit_code": 0,
+    "output": "self-test: OK",
+    "platform": "Windows"
+  },
+  "short_real_model_gateway": {
+    "status": "PASS",
+    "case": "short",
+    "implementation_sha256": "ddacd224fd579c4c96faf26b45d9c349c9174bdcbb4f7f19c58451c86261e694",
+    "test_sha256": "4c35a54f32357bf195d1fc567c356b868795d89160169e7dd9e35f1f6a1f4bb5",
+    "elapsed_seconds": 143.8,
+    "webhook_http": 200,
+    "adapter": "VideoLineAdapter",
+    "real_line_message_sent": false,
+    "scope": "Native short-video and delivery flow; subsequently changed the long integration revision and checklist timestamp instruction. The native delivery implementation is unchanged; current review code is exercised by the long fixture."
+  },
+  "long_real_model": {
+    "status": "PASS",
+    "implementation": {
+      "video_review.py": "1e2021494be899aef4ef7471ea41f63b062774fbb8b3af29a05c063e756f0d9f",
+      "video_takeaway_cascade.py": "1cb693fa3160cea074177aad49651893f7bad44c4d0b105c736d5087997d2f2f",
+      "video_recovery.py": "ff8da43ef2dffbbaa670aeeebb265a03187631a447ba63f9e3d231f04d925d73",
+      "video_evidence.py": "597c573c47658ad2b36b71da3bf79470fdaf1448a1c5f96a1ac653d2842a1b9c",
+      "video_workflow.py": "187020935c04c70c871b32e02ad66b053b32c7796004faf0f25c20a56f3791b6"
+    },
+    "real_line_message_sent": false,
+    "turns": [
+      {
+        "status": "pass",
+        "reason": null,
+        "seconds": 57.32,
+        "progress": {
+          "completed": 5,
+          "total": 5,
+          "ranges": [
+            {
+              "start": 0.0,
+              "end": 100.1,
+              "source_url": "https://m.facebook.com/watch?v=2592009897888759"
+            },
+            {
+              "start": 100.0,
+              "end": 123.2,
+              "source_url": "https://m.facebook.com/watch?v=2592009897888759"
+            },
+            {
+              "start": 120.0,
+              "end": 202.1,
+              "source_url": "https://m.facebook.com/watch?v=2592009897888759"
+            },
+            {
+              "start": 202.1,
+              "end": 241.7,
+              "source_url": "https://m.facebook.com/watch?v=2592009897888759"
+            },
+            {
+              "start": 241.7,
+              "end": 345.3,
+              "source_url": "https://m.facebook.com/watch?v=2592009897888759"
+            }
+          ]
+        },
+        "new_evidence": false,
+        "method": "independent_sections_and_final_integration",
+        "review_policy": "ninax-review-3.2"
+      }
+    ],
+    "duration": 345.398005,
+    "sections": 5,
+    "elapsed_seconds": 57.43,
+    "payload_sha256": "ad10fcbb17bb30b47cf316541b20c4ee1a7aa5539608a755c5cdba7f2895ba2c",
+    "scope": "Resumed real 345-second media after recorded source repairs and cached section reviews; elapsed_seconds is this final integration turn, not cold-start total latency.",
+    "replay": {
+      "exit_code": 0,
+      "status": "PASS",
+      "seconds": 0.37,
+      "new_review_calls": 0
+    },
+    "test_sha256": "57c2511f286b54a3f2d259112ef2b4f33cbf7fdac5b0fdaa3b15e7a814fdd354"
+  },
+  "visual_sequence": {
+    "status": "PASS",
+    "shifted_clip": {
+      "exit_code": 0,
+      "anchors": 17,
+      "offset_seconds": 2.099448992647059,
+      "creator_verified": false
+    },
+    "unrelated_clip_rejected": true,
+    "scope": "real re-encoded shifted fixture; cross-platform original author not accepted"
+  },
+  "rebuild": {
+    "bootstrap": {
+      "exit_code": 0,
+      "seconds": 55.9
+    },
+    "fresh_model_doctor": {
+      "status": "PASS",
+      "failures": []
+    },
+    "fresh_audio_decode": {
+      "exit_code": 0,
+      "duration": 14.60675,
+      "segments": 0,
+      "seconds": 2.81,
+      "fresh_cache": true
+    },
+    "fresh_audio_limitation": "Music/silent fixture produced no speech segments; proves model load and decoding only",
+    "install_rollback_reinstall": [
+      {
+        "exit_code": 0,
+        "status": "applied",
+        "files": 16
+      },
+      {
+        "exit_code": 0,
+        "status": "READY",
+        "files": 0
+      },
+      {
+        "exit_code": 0,
+        "status": "rolled_back",
+        "files": 16
+      },
+      {
+        "exit_code": 0,
+        "status": "applied",
+        "files": 16
+      }
+    ]
+  },
+  "github_actions": {
+    "status": "BLOCKED_BEFORE_ANY_STEP",
+    "run_url": "https://github.com/Reese-max/ninax-line-hermes/actions/runs/34139760873",
+    "head_sha": "9f96c79760473103cd8cf3ac2775dd638843ede4",
+    "annotation": "The job was not started because recent account payments have failed or your spending limit needs to be increased. Please check the Billing & plans section in your settings",
+    "repo_self_hosted_runners": 0
+  },
+  "production": {
+    "status": "PASS",
+    "checks": {
+      "/health": 200,
+      "/line/webhook/health": 200,
+      "signed_empty_webhook": 200,
+      "bot_info": 200,
+      "official_webhook": 200
+    },
+    "old_pid": 1227872,
+    "pid": 1301393,
+    "start_time": 34614036,
+    "bot_name": "NINAX",
+    "guard_pid": 1123259,
+    "lease": {
+      "active": true,
+      "holder": "standby-cursor-grokbot",
+      "generation": 8,
+      "expires_at": 1788798350.641
+    },
+    "gateway_state": "running",
+    "line_state": "connected",
+    "real_line_message_sent": false,
+    "phone_acceptance": "pending",
+    "time": 1788798301.7647371,
+    "update_status": "applied",
+    "changed_files": 11,
+    "verified_files": 15,
+    "restart_exit_code": 0,
+    "repeated_install_changes": 0,
+    "configuration_semantics_preserved": true,
+    "date_backups_preserved": true,
+    "other_host_gateway": "inactive and disabled",
+    "other_host_tunnel": "inactive and disabled",
+    "quality": {
+      "generated_at": 1788798405.0040307,
+      "turns": 0,
+      "audit_status": {},
+      "source_status": {},
+      "audit_pass_rate": null,
+      "turns_with_new_evidence": 0,
+      "latency_seconds": {
+        "p50": null,
+        "p95": null
+      },
+      "llm_calls": 0,
+      "known_usage_calls": 0,
+      "unknown_usage_calls": 0,
+      "reported_total_tokens": 0,
+      "cost": null,
+      "cost_status": "not_reported_by_provider",
+      "warnings": [],
+      "unreadable_records": 0
+    }
+  },
+  "external_acceptance": {
+    "metered_scraper": "pending_explicit_single_request_approval",
+    "phone_receipt": "pending_user_confirmation",
+    "cross_platform_original": "not_verified"
+  },
+  "limits": [
+    "Visual observations are sampled, not frame-complete.",
+    "A matching visual version does not identify its original author.",
+    "Localhost LINE delivery is not a real phone receipt.",
+    "No account billing settings changed."
+  ],
+  "runtime_package": {
+    "status": "PASS",
+    "files": 14,
+    "sha256": {
+      "work/profile/hooks/video_takeaway_cascade.py": "1cb693fa3160cea074177aad49651893f7bad44c4d0b105c736d5087997d2f2f",
+      "work/profile/hooks/enrich_cached_video.py": "5c73ac10066afd86a1fdead893ef73cb912c33602d53de47da289ac7aa741f28",
+      "work/profile/plugins/line-platform/plugin.yaml": "ddc6706d8504d391a108f66cb51081c392f53dfa9acbc939d2e35840803d61b7",
+      "work/profile/hooks/brightdata_ig_fallback.py": "5b37e9b03a688185844707d6778d184a53f05904f65b9c0a5be90e78002e344e",
+      "work/hermes/LICENSE": "821556e6336796450ab852d375117b48a4887e71d255794fd6318d99982a5ab6",
+      "work/profile/plugins/line-platform/__init__.py": "586859ab23da6fccee480c9f724fe2519b0fb9f1082374a2f7bf4febf2845107",
+      "work/hermes/gateway/run_turn_runner.py": "2887ac8d3e6d4afd4366e53a8142b392f3e7e0dbd43c747bf4856beffc147b1d",
+      "work/profile/hooks/video_recovery.py": "ff8da43ef2dffbbaa670aeeebb265a03187631a447ba63f9e3d231f04d925d73",
+      "work/profile/hooks/apify_ig_fallback.py": "7822f16f447482124a150cb10314502a7b7513980c56087499985235a9e1938e",
+      "work/profile/hooks/video_review.py": "1e2021494be899aef4ef7471ea41f63b062774fbb8b3af29a05c063e756f0d9f",
+      "work/profile/plugins/line-platform/README.md": "1ed3aab4bf53b889f4df15dfe7a189e682ed892081e9095d8901101c4f3395e0",
+      "work/profile/hooks/video_workflow.py": "187020935c04c70c871b32e02ad66b053b32c7796004faf0f25c20a56f3791b6",
+      "work/profile/hooks/video_evidence.py": "597c573c47658ad2b36b71da3bf79470fdaf1448a1c5f96a1ac653d2842a1b9c",
+      "work/profile/skills/media/video-timeline-pipeline/SKILL.md": "d0fb5a5b00c5024ae137e47e3f9f652cc7d11135a2444caf00e90da75213df19"
+    }
+  },
+  "real_targeted_recovery": {
+    "scope": "isolated long-video fixture",
+    "targets": [
+      {
+        "status": "completed",
+        "kind": "speech",
+        "start": 133.2,
+        "end": 139.9,
+        "new_evidence": true,
+        "analysis_policy": "ninax-audio-3.0",
+        "processed_start": 130.8,
+        "processed_end": 142.2
+      },
+      {
+        "status": "completed",
+        "kind": "speech",
+        "start": 221.9,
+        "end": 226.3,
+        "new_evidence": true,
+        "analysis_policy": "ninax-audio-3.0",
+        "processed_start": 219.1,
+        "processed_end": 226.7
+      },
+      {
+        "status": "completed",
+        "kind": "speech",
+        "start": 41.0,
+        "end": 45.7,
+        "new_evidence": true,
+        "analysis_policy": "ninax-audio-3.0",
+        "processed_start": 40.0,
+        "processed_end": 47.7
+      },
+      {
+        "status": "unchanged",
+        "kind": "speech",
+        "start": 84.7,
+        "end": 203.1,
+        "new_evidence": false,
+        "analysis_policy": "ninax-audio-3.0"
+      },
+      {
+        "status": "completed",
+        "kind": "visual",
+        "start": 84.0,
+        "end": 92.0,
+        "new_evidence": true,
+        "analysis_policy": "ninax-video-2.2"
+      },
+      {
+        "status": "completed",
+        "kind": "visual",
+        "start": 94.3,
+        "end": 109.9,
+        "new_evidence": true,
+        "analysis_policy": "ninax-video-2.2"
+      },
+      {
+        "status": "completed",
+        "kind": "visual",
+        "start": 186.2,
+        "end": 193.7,
+        "new_evidence": true,
+        "analysis_policy": "ninax-video-2.2"
+      },
+      {
+        "status": "completed",
+        "kind": "visual",
+        "start": 132.9,
+        "end": 147.3,
+        "new_evidence": true,
+        "analysis_policy": "ninax-video-2.2"
+      },
+      {
+        "status": "completed",
+        "kind": "speech",
+        "start": 245.7,
+        "end": 283.1,
+        "new_evidence": true,
+        "analysis_policy": "ninax-audio-3.0",
+        "processed_start": 241.7,
+        "processed_end": 285.9
+      },
+      {
+        "status": "completed",
+        "kind": "speech",
+        "start": 332.1,
+        "end": 340.9,
+        "new_evidence": true,
+        "analysis_policy": "ninax-audio-3.0",
+        "processed_start": 331.3,
+        "processed_end": 342.6
+      },
+      {
+        "status": "completed",
+        "kind": "speech",
+        "start": 296.9,
+        "end": 310.1,
+        "new_evidence": true,
+        "analysis_policy": "ninax-audio-3.0",
+        "processed_start": 293.9,
+        "processed_end": 311.7
+      }
+    ]
+  }
+}

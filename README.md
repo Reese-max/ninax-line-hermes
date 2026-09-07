@@ -2,7 +2,7 @@
 
 NINAX 的 LINE 機器人修復與影片補查實作。影片資訊不足時，先核對來源與既有影音，再補查字幕、語音及畫面；摘要經獨立檢核後，才送出與本回合相符的 LINE 文字。
 
-原始修復版本已部署。本次 goal 正在補上審稿回饋補查、長片分段、畫面比對、可重建環境、CI 與品質統計；進度見 [goal](video-loop/GOAL.md)，操作方式見 [重建與驗收](video-loop/OPERATIONS.md)。手機實收、計費抓片及跨平台長版原片須另有實際驗收紀錄。
+本次 goal 的程式已部署，包含審稿回饋補查、長片分段與整合修訂、畫面比對、可重建環境、CI 與品質統計。短片流程及 5 分 45 秒長片的多回合續接檢核通過；見 [goal](video-loop/GOAL.md)、[驗證紀錄](video-loop/evidence/goal-verification.json)及 [重建與驗收](video-loop/OPERATIONS.md)。GitHub CI 被帳戶付款／支出上限擋住；手機實收、計費抓片及跨平台長版原片仍待實際驗收。
 
 ## 檔案
 
@@ -21,7 +21,7 @@ NINAX 的 LINE 機器人修復與影片補查實作。影片資訊不足時，�
 
 ```bash
 H=/home/box/.hermes/hermes-agent
-B=/home/box/irisx-failover-restore/20260906/repair-20260907/video-loop
+B=/home/box/irisx-failover-restore/20260906/repair-20260907/goal-v3
 "$H/venv/bin/python" -B "$B/check_video.py"
 "$H/venv/bin/python" -B "$B/check_delivery.py"
 ```

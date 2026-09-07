@@ -31,7 +31,8 @@ assert doc['duration']>300 and 'full_media_missing' not in doc['gaps']
 receipt.update(duration=doc['duration'],sections=len(review.evidence_sections(doc)),source_status=doc['evidence_status'])
 started=time.monotonic()
 try:
-    for index in range(3):
+    # Recovery can add evidence and split a section; allow bounded continuation beyond three chunks.
+    for index in range(8):
         result=workflow.execute({'url':url,'question':'完整整理這支影片的主要內容、重要數字與條件，以及最後結論。',
             'profile':str(BASE/'isolated-long-review'),'session_id':'extended-fixture','session_key':'extended-fixture',
             'turn_id':'extended-'+str(os.getpid())+'-'+str(index),'jobs_root':str(args.job.parent)})
@@ -39,6 +40,7 @@ try:
              'seconds':result['elapsed_seconds'],'progress':result.get('progress'),
              'new_evidence':(result.get('recovery') or {}).get('new_evidence'),
              'method':result['audit'].get('method'),'review_policy':result['review_policy']})
+        receipt['sections']=(result.get('progress') or {}).get('total',receipt['sections'])
         evidence.atomic_json(args.out,receipt)
         if result['audit']['status']=='pass':
             break

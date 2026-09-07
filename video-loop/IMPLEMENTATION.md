@@ -1,4 +1,6 @@
-# NINAX 影片補查與摘要檢核實作
+# NINAX 影片補查與摘要檢核實作（原始版本）
+
+本檔保留 `88d4366` 的歷史部署與驗證資料。後續 goal 的版本、限制與實測結果見 [GOAL.md](GOAL.md)、[OPERATIONS.md](OPERATIONS.md) 及 [goal 驗證紀錄](evidence/goal-verification.json)。
 
 2026-09-07：補查、摘要檢核與 LINE 傳送檢查已實作並部署至唯一的 standby gateway；隔離流程通過，手機實收尚未驗收。完整測試與版本紀錄見 [evidence/release-evidence.json](evidence/release-evidence.json)。
 

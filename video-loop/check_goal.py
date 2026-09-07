@@ -121,22 +121,43 @@ def check_long_review():
     calls=[];clock=[0]
     def section_review(section,*args):
         calls.append([x['id'] for x in section['items']]);clock[0]+=60
-        requirements=[{'id':f'M{i}','description':x['text'],'evidence_ids':[x['id']]} for i,x in enumerate(section['items'])]
+        requirements=[{'id':f'M{i}','description':x['text'],'evidence_ids':[x['id']]} for i,x in enumerate(section['items']) if x['id']!='E2']
         return {'text':'已核對。\n\n'+'\n'.join(x['text'] for x in section['items'])+'\n\n來源：'+url,
                 'audit':{'status':'pass'},'must_cover':requirements}
+    def final_audit(proof,*args,**kwargs):
+        assert {x['id'] for x in proof['items']}=={x['id'] for x in doc['items']},'revision facts outside the original checklist must reach the final audit'
+        return valid_audit(proof,*args,**kwargs)
     with tempfile.TemporaryDirectory(prefix='ninax-chunks-') as directory,\
          patch.object(review,'payload',side_effect=text_payload),patch.object(review,'review',side_effect=section_review),\
-         patch.object(review,'audit_candidate',side_effect=valid_audit),patch.object(review.time,'monotonic',side_effect=lambda:clock[0]):
+         patch.object(review,'audit_candidate',side_effect=final_audit),patch.object(review.time,'monotonic',side_effect=lambda:clock[0]):
         pending=review.review_all(doc,'摘要',150,[],Path(directory))
+        assert pending['progress']['completed']==0 and not calls,'do not start a source audit with an unusable remaining budget'
+        pending=review.review_all(doc,'摘要',200,[],Path(directory))
         assert pending['progress']['completed']==1 and pending['audit']['status']=='blocked'
         clock[0]=0
+        with patch.object(review,'audit_candidate',side_effect=TimeoutError('model deadline')):
+            pending=review.review_all(doc,'摘要',900,[],Path(directory))
+        assert pending['progress']['completed']==len(sections) and pending['progress']['integration_pending']
+        assert '最後整合檢核尚未完成' in review.status_notice(doc['source'],progress=pending['progress'])
         result=review.review_all(doc,'摘要',900,[],Path(directory))
         assert len(calls)==len(sections),'already audited sections must not call the model again'
         assert result['audit']['status']=='pass' and doc['items'][-1]['text'] in result['text']
-        assert len(result['must_cover'])==len(doc['items'])
+        assert len(result['must_cover'])==len(doc['items'])-1
         bookkeeping={**doc,'processed_ranges':{'semantic_recovery':[{'kind':'visual','start':650,'end':655,'status':'completed'}]}}
         assert review.review_all(bookkeeping,'摘要',900,[],Path(directory))['audit']['status']=='pass'
         assert len(calls)==len(sections),'a different section repair must not invalidate unchanged source facts'
+        def revise_then_pass(proof,requirements,messages,*args,**kwargs):
+            audit=final_audit(proof,requirements,messages)
+            if '已補查：' not in messages[0]['text']:
+                audit.update(status='revise',contradictions=['需要標示第二個步驟的補查結果'])
+            return audit
+        with patch.object(review,'audit_candidate',side_effect=revise_then_pass),\
+             patch.object(review,'ask',return_value={'replacements':[{'old':doc['items'][1]['text'],'new':'已補查：'+doc['items'][1]['text']}]}) as rewrite:
+            revised=review.review_all(doc,'修訂測試',2000,[],Path(directory))
+            assert revised['audit']['status']=='pass' and len(revised['audit']['checks'])==2 and rewrite.call_count==1
+            assert '已補查：' in revised['text']
+            assert review.review_all(doc,'修訂測試',2000,[],Path(directory))['audit']['status']=='pass'
+            assert rewrite.call_count==1,'resume must reuse the saved revision and its real final audit'
         # A native message cap must block delivery, never silently discard the final chapter.
         def capped(text):
             return text_payload(text[:80] if text.startswith('以下依分段') else text)
