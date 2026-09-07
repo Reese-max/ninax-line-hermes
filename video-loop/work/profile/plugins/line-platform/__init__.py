@@ -8,6 +8,11 @@ import sys
 import time
 from types import SimpleNamespace
 
+_PLUGIN_DIR = Path(__file__).parent
+if str(_PLUGIN_DIR) not in sys.path:
+    sys.path.insert(0, str(_PLUGIN_DIR))
+from line_input_lifecycle import InputLifecycle
+
 from hermes_constants import get_hermes_home
 from plugins.platforms.line import adapter as native
 from gateway.platforms.base import BasePlatformAdapter, SendResult
@@ -18,6 +23,7 @@ from video_evidence import artifact_stamps, atomic_json, digest, evidence_revisi
 from video_review import MISSING_SOURCE_NOTICE, NOTICE, status_notice
 
 _TURN = contextvars.ContextVar('ninax_video_delivery', default=None)
+_INPUT = contextvars.ContextVar('ninax_line_input', default=None)
 URL_RE = re.compile(r'https://[^\s<>"\']+')
 RECALL = re.compile(r'再(?:說|講)一次|重複.{0,4}(?:摘要|重點)')
 RECOVER = re.compile(r'完整一點|補查|再查一次|重新查|補充.{0,6}(?:影片|內容|重點)')
@@ -37,6 +43,7 @@ class VideoLineAdapter(native.LineAdapter):
         self._video_home = Path(get_hermes_home()).resolve()
         self._video_state = self._video_home/'video-turns'
         self._video_state.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self._input_lifecycle = InputLifecycle(self._video_home/'line-input-lifecycle')
         self._video_jobs = (getattr(config,'extra',{}) or {}).get('video_jobs_root', '/workspace/video-timeline-pipeline/jobs')
         self._active_videos = {}
         self._reviewed_cache = {}
@@ -59,7 +66,52 @@ class VideoLineAdapter(native.LineAdapter):
         return {'url':saved['url'], 'force':bool(RECOVER.search(message)),
                 'recall':saved.get('result',{}) if RECALL.fullmatch(message.strip(' 。！!')) else {}}
 
+    async def _dispatch_event(self, event):
+        event_type = event.get('type') if isinstance(event,dict) else None
+        if event_type not in {'message','messageEdited'}:
+            return await super()._dispatch_event(event)
+        source = event.get('source') or {}
+        if self._bot_user_id and source.get('userId','') == self._bot_user_id:
+            return
+        if not native._allowed_for_source(source, allow_all=self.allow_all, user_ids=self.allowed_users,
+                                          group_ids=self.allowed_groups, room_ids=self.allowed_rooms):
+            return
+        chat_id, _ = native._resolve_chat(source)
+        try:
+            decision = self._input_lifecycle.accept(event, chat_id)
+        except (OSError,ValueError,TypeError,json.JSONDecodeError):
+            # A missing/corrupt identity or receipt must not start paid work.
+            return
+        if not decision['accepted']:
+            return
+        message_id = decision['message_id']
+        previous = self._active_videos.get((chat_id,message_id))
+        if previous and decision['input_revision'] > previous.get('input_binding',{}).get('input_revision',0):
+            handle = previous.get('run_handle')
+            if handle:
+                handle.interrupt()
+        event = {**event, '_ninax_input':decision}
+        return await self._handle_message_event(event)
+
     async def _process_message_background(self, event, session_key):
+        raw = event.raw_message if isinstance(event.raw_message,dict) else {}
+        input_binding = raw.get('_ninax_input')
+        if not isinstance(input_binding,dict) or not self._input_lifecycle.begin_job(input_binding):
+            return None
+        input_token = _INPUT.set(input_binding)
+        status = 'FAILED'
+        try:
+            result = await self._process_current_message_background(event, session_key)
+            status = 'COMPLETED'
+            return result
+        except asyncio.CancelledError:
+            status = 'INTERRUPTED'
+            raise
+        finally:
+            self._input_lifecycle.finish_job(input_binding,status)
+            _INPUT.reset(input_token)
+
+    async def _process_current_message_background(self, event, session_key):
         request = self._video_request(event.text, session_key)
         if not request:
             result = await super()._process_message_background(event, session_key)
@@ -68,7 +120,8 @@ class VideoLineAdapter(native.LineAdapter):
                 atomic_json(self._session_path(session_key),{**saved,'last_was_video':False})
             return result
         state = {'request':request, 'message_id':event.message_id, 'chat_id':event.source.chat_id,
-                 'session_key':session_key, 'approval':None, 'delivery':'pending'}
+                 'session_key':session_key, 'approval':None, 'delivery':'pending',
+                 'input_binding':_INPUT.get()}
         raw = event.raw_message if isinstance(event.raw_message,dict) else {}
         state['reply_token'] = raw.get('replyToken','')
         state['reply_expires'] = float(raw.get('timestamp') or time.time()*1000)/1000+native.LINE_REPLY_TOKEN_TTL_SECONDS
@@ -77,7 +130,9 @@ class VideoLineAdapter(native.LineAdapter):
         try:
             await super()._process_message_background(event, session_key)
         finally:
-            self._active_videos.pop((state['chat_id'],state['message_id']), None)
+            key = (state['chat_id'],state['message_id'])
+            if self._active_videos.get(key) is state:
+                self._active_videos.pop(key,None)
             _TURN.reset(token)
 
     def run_custom_turn(self, ctx):
@@ -87,12 +142,15 @@ class VideoLineAdapter(native.LineAdapter):
                 raise RuntimeError('video_turn_context_missing')
             return None
         handle = _VideoRun()
+        state['run_handle'] = handle
         state['deadline'] = time.monotonic()+300
         ctx.agent_holder[0] = handle
         turn_id = digest([str(self._video_home),ctx.session_id,ctx.session_key,
-                          ctx.inbound_message_id or state['message_id'],ctx.run_generation])
+                          ctx.inbound_message_id or state['message_id'],ctx.run_generation,
+                          state['input_binding']['input_revision'],state['input_binding']['input_sha256']])
         request = {**state['request'], 'profile':str(self._video_home), 'session_id':ctx.session_id,
                    'session_key':ctx.session_key, 'turn_id':turn_id, 'question':ctx.message,
+                   **{k:state['input_binding'][k] for k in ('input_id','input_revision','input_sha256')},
                    'jobs_root':self._video_jobs, 'seconds':290}
         if not request['url']:
             for row in reversed(ctx.history or []):
@@ -105,7 +163,8 @@ class VideoLineAdapter(native.LineAdapter):
                     break
                 if not (FOLLOW.search(row['content']) or RECOVER.search(row['content']) or RECALL.search(row['content'])):
                     break
-        state['binding'] = {k:request[k] for k in ('profile','session_id','session_key','turn_id')}
+        state['binding'] = {k:request[k] for k in ('profile','session_id','session_key','turn_id',
+                                                    'input_id','input_revision','input_sha256')}
         try:
             if not request['url']:
                 raise LookupError('video_source_missing')
@@ -144,6 +203,14 @@ class VideoLineAdapter(native.LineAdapter):
         return False if _TURN.get() else super()._wants_auto_tts(*args,**kwargs)
 
     async def send(self, chat_id, content, reply_to=None, metadata=None):
+        input_binding = _INPUT.get()
+        if input_binding and not self._input_lifecycle.is_current(input_binding):
+            try:
+                self._input_lifecycle.record_delivery(input_binding,'REJECTED_STALE',
+                    digest(native._text_messages(content)))
+            except (OSError,ValueError,json.JSONDecodeError):
+                pass
+            return SendResult(success=False,error='stale_input_revision')
         state = _TURN.get()
         if state:
             return await self._send_messages(chat_id, native._text_messages(content), text=True)
@@ -152,8 +219,22 @@ class VideoLineAdapter(native.LineAdapter):
                 return await native.LineAdapter._send_messages(self,chat_id,native._text_messages(content),text=True)
             return SendResult(success=False, error='unbound_video_delivery')
         rid = self._pending_buttons.get(chat_id)
-        if rid and not native._is_system_bypass(content):
-            self._reviewed_cache[rid] = (chat_id, digest(native._text_messages(content)))
+        deferred = bool(rid and not native._is_system_bypass(content))
+        if deferred:
+            self._reviewed_cache[rid] = (chat_id, digest(native._text_messages(content)), input_binding)
+        if input_binding:
+            payload_sha256 = digest(native._text_messages(content))
+            try:
+                self._input_lifecycle.record_delivery(input_binding,'UNKNOWN',payload_sha256)
+            except (OSError,ValueError,json.JSONDecodeError):
+                return SendResult(success=False,error='input_delivery_receipt_failed')
+            result = await super().send(chat_id, content, reply_to=reply_to, metadata=metadata)
+            if result.success and not deferred:
+                try:
+                    self._input_lifecycle.record_delivery(input_binding,'DELIVERED',payload_sha256)
+                except (OSError,ValueError,json.JSONDecodeError):
+                    pass  # Transport may have accepted; never invite a duplicate retry.
+            return result
         return await super().send(chat_id, content, reply_to=reply_to, metadata=metadata)
 
     async def _handle_postback_event(self, event):
@@ -169,10 +250,28 @@ class VideoLineAdapter(native.LineAdapter):
             owner = next((chat for chat,pending in self._pending_buttons.items() if pending==rid),None)
         if not entry or owner != chat_id:
             return
+        reviewed = None
         if entry.state is native.State.READY:
-            if self._reviewed_cache.get(rid) != (chat_id,digest(native._text_messages(str(entry.payload or '')))):
+            reviewed = self._reviewed_cache.get(rid)
+            if (not reviewed or reviewed[:2] != (chat_id,digest(native._text_messages(str(entry.payload or ''))))
+                    or not reviewed[2] or not self._input_lifecycle.is_current(reviewed[2])):
+                if reviewed and reviewed[2]:
+                    try:
+                        self._input_lifecycle.record_delivery(reviewed[2],'REJECTED_STALE',reviewed[1])
+                    except (OSError,ValueError,json.JSONDecodeError):
+                        pass
                 return
-        return await super()._handle_postback_event(event)
+            try:
+                self._input_lifecycle.record_delivery(reviewed[2],'UNKNOWN',reviewed[1])
+            except (OSError,ValueError,json.JSONDecodeError):
+                return
+        result = await super()._handle_postback_event(event)
+        if entry.state is native.State.DELIVERED and reviewed:
+            try:
+                self._input_lifecycle.record_delivery(reviewed[2],'DELIVERED',reviewed[1])
+            except (OSError,ValueError,json.JSONDecodeError):
+                pass
+        return result
 
     def _approved(self, state, chat_id, messages):
         approval = state.get('approval') or {}
@@ -204,6 +303,14 @@ class VideoLineAdapter(native.LineAdapter):
             if any(k[0] == chat_id for k in self._active_videos):
                 return SendResult(success=False, error='unbound_video_delivery')
             return await super()._send_messages(chat_id,messages,force_push=force_push,text=text)
+        input_binding = state.get('input_binding')
+        if not input_binding or not self._input_lifecycle.is_current(input_binding):
+            if input_binding:
+                try:
+                    self._input_lifecycle.record_delivery(input_binding,'REJECTED_STALE',digest(messages))
+                except (OSError,ValueError,json.JSONDecodeError):
+                    pass
+            return SendResult(success=False,error='stale_input_revision')
         if state['delivery'] != 'pending' or not self._approved(state,chat_id,messages):
             return SendResult(success=False,error='video_delivery_not_approved')
         prior = read_json(self._video_state/(state['binding']['turn_id']+'.delivery.json'))
@@ -240,9 +347,12 @@ class VideoLineAdapter(native.LineAdapter):
         return SendResult(success=True,message_id=state['binding']['turn_id'])
 
     def _record_delivery(self, state):
-        atomic_json(self._video_state/(state['binding']['turn_id']+'.delivery.json'),
-                    {'binding':state['binding'],'status':state['delivery'],
-                     'payload_sha256':state['approval']['payload_sha256'],'time':time.time()})
+        input_binding = state['input_binding']
+        receipt = {'binding':state['binding'],'input_binding':input_binding,'status':state['delivery'],
+                   'payload_sha256':state['approval']['payload_sha256'],'time':time.time()}
+        atomic_json(self._video_state/(state['binding']['turn_id']+'.delivery.json'),receipt)
+        lifecycle_status = 'DELIVERED' if state['delivery']=='delivered' else 'UNKNOWN'
+        self._input_lifecycle.record_delivery(input_binding,lifecycle_status,state['approval']['payload_sha256'])
 
 
 def register(ctx):
