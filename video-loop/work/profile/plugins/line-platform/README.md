@@ -9,3 +9,23 @@ Video work reuses the installed video pipeline, media and per-image caches. `evi
 Limits per turn: 300 seconds including delivery, up to 3 searches and 3 candidate URLs, one extra single-video metered fetch, one summary revision, two audits. Title similarity does not establish video identity. Unverified related sources never become facts about the requested clip. An unavailable audit produces an explicit limitation notice, never an unaudited new summary.
 
 Validation: `check_video.py` covers evidence, identity, cache, concurrency, audit coverage and child-process cleanup. `check_line_video.py` loads the actual modified TurnRunner and profile plugin in a temporary Hermes home, calls the real configured provider, redirects only LINE transport to localhost, and checks final payload/persistence/bypass behavior. Real phone acceptance remains a separate check.
+
+
+## Edited messages and webhook redelivery
+
+Before the native Hermes queue starts any work, the profile writes a durable receipt keyed by
+`webhookEventId` and a versioned message record keyed by chat plus `message.id`. Exact canonical
+message content is SHA-256 bound to its input revision; message bodies are not retained in these
+receipts. A duplicate event or duplicate content never starts another job. An older `timestamp`,
+or different content with the same timestamp, fails closed.
+
+LINE `messageEdited` text events use the same path as messages but advance the revision. Advancing
+a revision marks the prior job `SUPERSEDED`; every outbound payload checks that its input binding is
+still current. Cost and delivery receipts share `input_id:revision`, so a delivered result can be
+traced to the exact accepted content hash. These receipts live under
+`$HERMES_HOME/line-input-lifecycle`.
+
+Validation: `check_input_lifecycle.py` covers duplicate/redelivered events, edited content,
+out-of-order arrival, equal-timestamp conflicts, restart recovery, one-start cost attribution and
+delivery binding without contacting LINE or a model provider.
+
