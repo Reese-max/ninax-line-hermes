@@ -111,15 +111,22 @@ def search(evidence, deadline, ledger, limit=3):
     return candidates
 
 
-def refresh_metadata(url, job, deadline):
-    # yt-dlp obtains a fresh page/CDN URL without downloading an unrelated full video.
-    result = run(['yt-dlp', '--no-playlist', '--skip-download', '--dump-single-json', '--no-warnings',
+def metadata(url, deadline):
+    result = run([str(PIPELINE/'.venv/bin/python'),'-m','yt_dlp','--no-playlist', '--skip-download', '--dump-single-json', '--no-warnings',
                   '--socket-timeout', '8', '--retries', '0', '--', url], deadline, timeout=22)
     if result.returncode:
-        return False
+        return {}
     info = json.loads(result.stdout)
     wanted, actual = identity(url), identity(info.get('webpage_url') or '')
     if not wanted or not actual or any(wanted[k] != actual[k] for k in ('platform', 'id')):
+        return {}
+    return info
+
+
+def refresh_metadata(url, job, deadline):
+    # yt-dlp obtains a fresh page/CDN URL without downloading an unrelated full video.
+    info=metadata(url,deadline)
+    if not info:
         return False
     urls = [f.get('url') for f in info.get('formats', []) if f.get('ext') == 'mp4'
             and f.get('acodec') != 'none' and f.get('vcodec') != 'none']
@@ -254,15 +261,25 @@ def recover_original(evidence, candidates, job, deadline, ledger):
         entry = {'stage':'verify_original_source','url':candidate['url'],'status':'started'}
         ledger.append(entry)
         try:
-            result = run([PIPELINE_COMMAND,'--url',candidate['url'],'--no-video',
-                          '--local-only','--root',str(root),'--workers','1'],deadline,timeout=20)
-            selected = next((p.parent for p in (root/'jobs').glob('*/source.info.json')
-                             if matches(p.parent,candidate['url'])),None)
-            if result.returncode or not selected:
-                entry.update(status='unverified',reason='source_subtitles_unavailable')
+            info=metadata(candidate['url'],deadline)
+            if not info:
+                entry.update(status='unverified',reason='source_metadata_unavailable')
                 continue
-            info = read_json(selected/'source.info.json')
-            transcript = read_json(selected/'transcript.json')
+            transcript={}
+            # Missing or rate-limited captions cannot block a silent video's visual comparison.
+            if any(x['kind']=='speech' and len(x.get('text',''))>=20 for x in evidence.get('items',[])):
+                try:
+                    run([PIPELINE_COMMAND,'--url',candidate['url'],'--no-video',
+                         '--local-only','--root',str(root),'--workers','1'],deadline,timeout=20)
+                except TimeoutError:
+                    entry['caption_status']='timeout'
+                selected = next((p.parent for p in (root/'jobs').glob('*/source.info.json')
+                                 if matches(p.parent,candidate['url'])),None)
+                if selected:
+                    transcript=read_json(selected/'transcript.json')
+                entry.setdefault('caption_status','available' if transcript.get('segments') else 'unavailable')
+            else:
+                entry['caption_status']='skipped_without_source_speech'
             alignment = align_transcripts(evidence,info,transcript)
             duration = float(info.get('duration') or 0)
             if not math.isfinite(duration) or duration<=0:
@@ -273,11 +290,16 @@ def recover_original(evidence, candidates, job, deadline, ledger):
                 result=run([PIPELINE_COMMAND,'--url',candidate['url'],'--local-only','--root',str(root),
                             '--workers','1'],deadline,timeout=35,
                            is_current=lambda:sum(p.stat().st_size for p in root.rglob('*') if p.is_file())<=128*1024*1024)
+                selected = next((p.parent for p in (root/'jobs').glob('*/source.info.json')
+                                 if matches(p.parent,candidate['url'])),None)
+                if not selected:
+                    entry.update(status='unverified',reason='candidate_media_unavailable')
+                    continue
                 candidate_media=Path(read_json(selected/'manifest.json').get('source',{}).get('resolved_video') or '/nonexistent')
                 if not candidate_media.is_absolute():
                     candidate_media=root/candidate_media
                 source_media=Path(read_json(job/'media-proof.json').get('file_path') or '/nonexistent')
-                if result.returncode==0 and candidate_media.is_file() and candidate_media.resolve().is_relative_to(selected.resolve()):
+                if (selected/'.download-complete').is_file() and candidate_media.is_file() and candidate_media.resolve().is_relative_to(selected.resolve()):
                     output=run([str(PIPELINE/'.venv/bin/python'),str(Path(__file__)),'--visual-match'],deadline,timeout=35,
                                input=json.dumps({'source':str(source_media),'candidate':str(candidate_media),'root':str(job),
                                                  'expected_source_sha256':evidence['media_sha256']}))
@@ -302,6 +324,8 @@ def recover_original(evidence, candidates, job, deadline, ledger):
 
 def metered_fetch(url, state_path, deadline, jobs_root):
     """One single-URL async request. Uncertain acceptance is never retriggered."""
+    if os.environ.get('NINAX_DISABLE_METERED_FETCH')=='1':
+        return {'ok':False,'reason':'metered_fetch_disabled'}
     state_path = Path(state_path)
     state_path.parent.mkdir(parents=True,exist_ok=True)
     with job_lock(state_path.parent,deadline,state_path.stem+'.lock'):

@@ -57,11 +57,17 @@ python /srv/ninax/profile/hooks/video_workflow.py --report /srv/ninax/video-pipe
 
 ## 真實驗收
 
-`check_line_video.py` 使用真實 gateway、模型及影片，LINE 傳送只導向 localhost。`check_extended.py --job ... --profile ... --out ...` 驗證已備妥的長片，最多八個明確的隔離回合，保留每次缺口與進度；不向 LINE 發訊息。遇到審稿失敗就停止；只有待續分段或指定補查會接續。
+`check_line_video.py --case short --source-job /path/to/prepared/job` 使用真實 gateway、模型及已備妥的影片，LINE 傳送只導向 localhost。影片案例必須提供來源 job，會複製必要影音與辨識資料到新的隔離 jobs 目錄，並強制設定 `NINAX_DISABLE_METERED_FETCH=1`。缺少 `--source-job` 就退出，不能從測試自動取得計費來源；一般對話案例 `--case normal` 不需要影片。
+
+`check_extended.py --job ... --profile ... --out ...` 驗證已備妥的長片，同樣強制禁止計費抓片後備；最多八個明確的隔離回合，保留每次缺口與進度，不向 LINE 發訊息。遇到審稿失敗就停止；只有待續分段或指定補查會接續。
+
+`check_cross_platform.py --hooks /path/to/profile/hooks --source-job /path/to/prepared/job --job /path/to/new/fixture --candidate https://www.youtube.com/watch?v=VIDEO_ID --out /path/to/new/receipt.json` 只用公開候選與本機處理，強制禁止計費後備。來源與輸出必須隔離；一次驗證一個候選，未通過回傳 exit 1。字幕失敗或逾時且仍有預算時，繼續畫面比對；無可用語音錨點時直接比對畫面。必須有下載完成標記與相符的來源身分，不能用半成品或相似標題判定為原片。
 
 手機驗收需將影片連結送給 NINAX，確認收到重點、片尾及來源，再送「完整一點」；長片未完成時用「繼續摘要」。以正式回合／delivery 收據配對手機回報，不能只看 health 或 HTTP 200。
 
 計費抓片需另有明確的單次授權，沿用一份 state 收據；狀態 pending／unknown 不重送 POST。Bright Data 的餘額查詢權限與擷取權限不同，不能把餘額 HTTP 403 判成擷取故障。Apify 未配置時列為 unavailable，不假裝完成備援。
+
+2026-09-08 稽核發現先前兩輪隔離短片測試在單次授權尚未取得時觸發 Bright Data，兩份任務均已完成，實際費用未知。已停止新增計費驗收並修正上述測試入口；完整紀錄保留於 `evidence/goal-verification.json`。此禁止開關套用於驗收工具，不變更既有正式機器人的供應商設定。
 
 目前的非同步擷取使用單一 URL 的 `input` 陣列物件；Bright Data 的[官方 Instagram 文件](https://brightdata.mintlify.app/products/scrapers/instagram/introduction)確認此 request body 可用於 `/trigger`。
 

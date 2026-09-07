@@ -32,6 +32,10 @@ def valid_audit(doc,requirements,messages,*args,**kwargs):
 
 
 def check_recovery():
+    with patch.dict(recovery.os.environ,{'NINAX_DISABLE_METERED_FETCH':'1'}),\
+         patch.object(recovery,'_metered_fetch',side_effect=AssertionError('paid backend must not be called')):
+        blocked=recovery.metered_fetch('https://www.instagram.com/reel/GoalCheck',Path('/not-created/state.json'),0,Path('/not-created'))
+        assert blocked=={'ok':False,'reason':'metered_fetch_disabled'}
     url='https://www.instagram.com/reel/GoalCheck'
     doc={'source':ev.identity(url),'source_aliases':[url],'duration':30,'items':[
         {'id':'E1','kind':'speech','start':4,'end':7,'text':'等三十秒','source_url':url},
@@ -109,6 +113,42 @@ def check_recovery():
     assert recovery.align_visuals([{'timestamp':i,'hash':'1'*64} for i in range(5)],target,14) is None
     repeated=target+[{**target[0],'timestamp':70}]
     assert recovery.align_visuals(source[:4],repeated,14) is None
+    candidate='https://www.youtube.com/watch?v=GoalVisualCheck'
+    with tempfile.TemporaryDirectory(prefix='ninax-caption-fallback-') as directory:
+        for mode in ('silent','failed','timeout','incomplete'):
+            job=Path(directory)/mode;job.mkdir()
+            media=job/'cached-media.mp4';media.write_bytes(b'isolated')
+            ev.atomic_json(job/'media-proof.json',{'file_path':str(media)})
+            proof={'source':ev.identity(url),'duration':14,'media_sha256':'fixture',
+                   'items':[] if mode=='silent' else [{'kind':'speech','text':'a distinctive spoken sentence that has no available subtitles'}]}
+            calls=[]
+            def candidate_run(args,*unused,**kwargs):
+                calls.append(args)
+                if '--no-video' in args:
+                    if mode=='timeout':raise TimeoutError('caption deadline')
+                    return subprocess.CompletedProcess(args,1,'','HTTP 429')
+                if '--visual-match' in args:
+                    body=json.loads(kwargs['input'])
+                    assert body['expected_source_sha256']=='fixture' and body['source']==str(media)
+                    return subprocess.CompletedProcess(args,0,json.dumps(match),'')
+                assert '--local-only' in args,'candidate acquisition must not use cloud processing'
+                root=Path(args[args.index('--root')+1]);selected=root/'jobs/candidate';selected.mkdir(parents=True)
+                ev.atomic_json(selected/'source.info.json',{'webpage_url':candidate})
+                ev.atomic_json(selected/'manifest.json',{'source':{'resolved_video':'jobs/candidate/source.mp4'}})
+                (selected/'source.mp4').write_bytes(b'local-only')
+                if mode!='incomplete':(selected/'.download-complete').touch()
+                return subprocess.CompletedProcess(args,0,'','')
+            ledger=[]
+            with patch.object(recovery,'metadata',return_value={'webpage_url':candidate,'duration':40}),\
+                 patch.object(recovery,'run',side_effect=candidate_run):
+                verified=recovery.recover_original(proof,[{'url':candidate,'relation':'unverified_candidate'}],job,time.monotonic()+90,ledger)
+            assert verified==(mode!='incomplete')
+            assert sum('--no-video' in call for call in calls)==int(mode!='silent')
+            assert sum('--visual-match' in call for call in calls)==int(mode!='incomplete')
+            if verified:
+                external=ev.read_json(job/'external-evidence.json')
+                assert external['target']==proof['source'] and external['source_media_sha256']=='fixture'
+                assert external['verification']['creator_verified'] is False
 
 
 def check_long_review():
@@ -165,7 +205,8 @@ def check_long_review():
             clipped=review.review_all(doc,'摘要',900,[],Path(directory))
         assert clipped['audit']['reason']=='line_payload_limit'
     print(json.dumps({'status':'PASS','checks':['target_binding','whole_segment_repair','no_duplicate_asr',
-          'repair_then_reaudit','visual_order_without_creator_claim','durable_sections','tail_preserved',
+          'repair_then_reaudit','visual_order_without_creator_claim','caption_failure_visual_fallback',
+          'metered_tests_disabled','durable_sections','tail_preserved',
           'line_cap_fails_closed','metrics_do_not_invent_cost']}))
 
 

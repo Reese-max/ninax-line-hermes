@@ -23,7 +23,10 @@ HERMES=Path('/home/box/.hermes/hermes-agent')
 PRODUCTION=Path('/home/box/irisx-failover-restore/20260906/profile-irisx')
 parser=argparse.ArgumentParser()
 parser.add_argument('--case',choices=['short','long','normal'],default='short')
+parser.add_argument('--source-job',type=Path,help='Prepared cached media; required for video cases')
 args=parser.parse_args()
+if args.case!='normal' and not args.source_job:
+    parser.error('--source-job is required; this test must not acquire a paid source')
 from deploy import FILES
 IMPLEMENTATION={name:hashlib.sha256((BASE/'work'/name).read_bytes()).hexdigest() for name in FILES}
 IMPLEMENTATION_SHA=hashlib.sha256(json.dumps(IMPLEMENTATION,sort_keys=True).encode()).hexdigest()
@@ -35,7 +38,11 @@ for key in list(os.environ):
         del os.environ[key]
 os.environ.update(HERMES_HOME=str(HOME),LINE_HOST='127.0.0.1',LINE_PORT='0',
                   LINE_CHANNEL_ACCESS_TOKEN='isolated-token',LINE_CHANNEL_SECRET='isolated-secret',
-                  LINE_ALLOW_ALL_USERS='true',HERMES_DISABLE_BACKGROUND_REVIEW='1')
+                  LINE_ALLOW_ALL_USERS='true',HERMES_DISABLE_BACKGROUND_REVIEW='1',NINAX_DISABLE_METERED_FETCH='1')
+if args.source_job:
+    from check_cross_platform import prepare_fixture
+    prepare_fixture(args.source_job,HOME/'jobs/fixture')
+video_url=json.loads((HOME/'jobs/fixture/source.info.json').read_text())['webpage_url'] if args.case!='normal' else None
 cfg=yaml.safe_load((PRODUCTION/'config.yaml').read_text())
 cfg['plugins']={'enabled':['line-platform']}
 cfg['terminal']['cwd']=str(HOME)
@@ -95,7 +102,7 @@ async def main():
     config=GatewayConfig(platforms={Platform('line'):PlatformConfig(enabled=True,gateway_restart_notification=False,
         extra={'channel_access_token':'isolated-token','channel_secret':'isolated-secret','host':'127.0.0.1','port':0,
                'allow_all_users':True,'slow_response_threshold':0 if args.case=='normal' else 1,
-               'video_jobs_root':str(BASE/'test-jobs')})},loop_watchdog=False)
+               'video_jobs_root':str(HOME/'jobs')})},loop_watchdog=False)
     runner=GatewayRunner(config)
     started=time.monotonic()
     try:
@@ -103,9 +110,8 @@ async def main():
         adapter=runner.adapters[Platform('line')]
         assert type(adapter).__name__=='VideoLineAdapter',type(adapter).__name__
         port=adapter._site._server.sockets[0].getsockname()[1]
-        code={'short':'DZrNsyXivVc','long':'DY66ObpOlby'}.get(args.case)
-        question=(f'請完整摘要這支影片的實際內容，包含重要情節與結尾：https://www.instagram.com/reel/{code}/'
-                  if code else '請用 terminal 執行 printf NINAX_NORMAL_CHECK，然後只回覆它的輸出。')
+        question=(f'請完整摘要這支影片的實際內容，包含重要情節與結尾：{video_url}'
+                  if video_url else '請用 terminal 執行 printf NINAX_NORMAL_CHECK，然後只回覆它的輸出。')
         user='U'+'0'*32
         event={'type':'message','webhookEventId':'ninax-loop-'+str(os.getpid()),'replyToken':'isolated-reply',
                'timestamp':int(time.time()*1000),'source':{'type':'user','userId':user},
@@ -119,7 +125,7 @@ async def main():
         await asyncio.wait_for(delivered.wait(),timeout=310)
         await asyncio.sleep(0.5)
         text='\n'.join(m.get('text','') for c in captured for m in c['messages'])
-        if code:
+        if video_url:
             sessions=[json.loads(p.read_text()) for p in (HOME/'video-turns').glob('*.json') if not p.name.endswith('.delivery.json')]
             assert len(sessions)==1,sessions
             result=sessions[0]['result']
@@ -193,13 +199,15 @@ async def main():
         rows=db.execute('SELECT role,content FROM messages ORDER BY rowid').fetchall()
         db.close()
         assert any(role=='user' and question in content for role,content in rows)
-        assert any(role=='assistant' and ('來源：' in content if code else 'NINAX_NORMAL_CHECK' in content) for role,content in rows)
-        if not code:
+        assert any(role=='assistant' and ('來源：' in content if video_url else 'NINAX_NORMAL_CHECK' in content) for role,content in rows)
+        if not video_url:
             assert any(role=='tool' and 'NINAX_NORMAL_CHECK' in content for role,content in rows),'native tool result missing'
+        assert not list((HOME/'jobs/.ninax-recovery').glob('*.json')),'isolated tests must not submit provider requests'
         receipt={'gate':'real-line-video-flow','status':'PASS','case':args.case,'home':str(HOME),
                  'implementation_sha256':IMPLEMENTATION_SHA,'test_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                  'elapsed_seconds':round(time.monotonic()-started,1),'webhook_http':200,
                  'adapter':type(adapter).__name__,'captured_delivery':captured,'real_line_message_sent':False,
+                 'metered_fetch_disabled':True,'provider_request_receipts':0,
                  'persistence_roles':[r[0] for r in rows]}
         (BASE/('line-gate-'+args.case+'.json')).write_text(json.dumps(receipt,ensure_ascii=False,indent=2))
         print(json.dumps(receipt,ensure_ascii=False),flush=True)

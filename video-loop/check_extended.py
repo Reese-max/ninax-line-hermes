@@ -13,6 +13,7 @@ parser.add_argument('--profile',type=Path,required=True,help='Existing model cre
 parser.add_argument('--out',type=Path,required=True)
 args=parser.parse_args()
 os.environ['HERMES_HOME']=str(args.profile)
+os.environ['NINAX_DISABLE_METERED_FETCH']='1'
 from dotenv import load_dotenv
 load_dotenv(args.profile/'.env')
 BASE=Path(__file__).parent
@@ -22,7 +23,7 @@ import video_evidence as evidence
 import video_review as review
 
 manifest={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in (BASE/'work/profile/hooks').glob('video_*.py')}
-receipt={'status':'RUNNING','implementation':manifest,'real_line_message_sent':False,'turns':[]}
+receipt={'status':'RUNNING','implementation':manifest,'real_line_message_sent':False,'metered_fetch_disabled':True,'turns':[]}
 evidence.atomic_json(args.out,receipt)
 evidence.JOBS=workflow.cascade.JOBS=args.job.parent
 url=json.loads((args.job/'source.info.json').read_text())['webpage_url']

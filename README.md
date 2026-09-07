@@ -2,7 +2,7 @@
 
 NINAX 的 LINE 機器人修復與影片補查實作。影片資訊不足時，先核對來源與既有影音，再補查字幕、語音及畫面；摘要經獨立檢核後，才送出與本回合相符的 LINE 文字。
 
-本次 goal 的程式已部署，包含審稿回饋補查、長片分段與整合修訂、畫面比對、可重建環境、CI 與品質統計。短片流程及 5 分 45 秒長片的多回合續接檢核通過；見 [goal](video-loop/GOAL.md)、[驗證紀錄](video-loop/evidence/goal-verification.json)及 [重建與驗收](video-loop/OPERATIONS.md)。GitHub CI 被帳戶付款／支出上限擋住；手機實收、計費抓片及跨平台長版原片仍待實際驗收。
+本次 goal 的程式已部署，包含審稿回饋補查、長片分段與整合修訂、畫面比對、可重建環境、CI 與品質統計。短片流程及 5 分 45 秒長片的多回合續接檢核通過；見 [goal](video-loop/GOAL.md)、[驗證紀錄](video-loop/evidence/goal-verification.json)及 [重建與驗收](video-loop/OPERATIONS.md)。GitHub CI 被帳戶付款／支出上限擋住；手機實收及跨平台長版原片仍待驗收。稽核發現先前兩輪隔離測試在未取得單次授權時觸發 Bright Data 並完成，實際費用未知；已停止新增計費驗收，修正測試邊界及紀錄。
 
 ## 檔案
 
@@ -26,7 +26,7 @@ B=/home/box/irisx-failover-restore/20260906/repair-20260907/goal-v3
 "$H/venv/bin/python" -B "$B/check_delivery.py"
 ```
 
-`check_live_summary.py` 與 `check_line_video.py` 會使用已配置的模型服務；後者把 LINE 傳送導向 localhost。正式手機驗收另行記錄。
+`check_live_summary.py` 與 `check_line_video.py` 會使用已配置的模型服務；後者把 LINE 傳送導向 localhost，影片案例必須提供 `--source-job`，並強制禁止計費抓片後備。正式手機驗收另行記錄。
 
 Git 以明確清單追蹤程式與已整理的驗證檔，正式設定、金鑰、登入資料、對話資料庫、備份及影音不納入版本。GitHub 推送不會重新啟動服務或改變主機控制權。
 
