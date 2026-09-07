@@ -17,7 +17,7 @@ HERMES=Path('/home/box/.hermes/hermes-agent')
 CONFIG_SHA='43cca379b51a6be065d4eadbb8ffa6c68781c801cb549ead7d16396f941ad1e6'
 FILES=['hermes/gateway/run_turn_runner.py']+['profile/hooks/'+n+'.py' for n in
     ('video_evidence','enrich_cached_video','video_takeaway_cascade','video_recovery','video_review','video_workflow')]+[
-    'profile/plugins/line-platform/'+n for n in ('plugin.yaml','__init__.py','README.md')]+[
+    'profile/plugins/line-platform/'+n for n in ('plugin.yaml','__init__.py','line_input_lifecycle.py','README.md')]+[
     'profile/skills/media/video-timeline-pipeline/SKILL.md']
 
 
@@ -101,3 +101,4 @@ def main():
 
 
 if __name__=='__main__':main()
+
