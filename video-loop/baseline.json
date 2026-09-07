@@ -1,0 +1,111 @@
+{
+  "captured_at": "2026-09-07T17:57:18.09096+08:00",
+  "head": "13e72fb205b735df679e0fd5f5996a34ac4accc6",
+  "git_status": "",
+  "files": {
+    "profile/hooks/video_takeaway_cascade.py": {
+      "sha256": "f2fee4619a1090b6c01a825382d6bbe950cfebd8556ee3d704abb78562cde61f",
+      "remote": "/home/box/irisx-failover-restore/20260906/profile-irisx/hooks/video_takeaway_cascade.py"
+    },
+    "profile/hooks/video-url-prefetch.sh": {
+      "sha256": "95801545796cec13776739c9b8afc6816a3315f0210affb25723860eeedfa3ab",
+      "remote": "/home/box/irisx-failover-restore/20260906/profile-irisx/hooks/video-url-prefetch.sh"
+    },
+    "profile/hooks/enrich_cached_video.py": {
+      "sha256": "6217e787c3fb5def41ea7cc33986210a7a88509be50503bcbea60e345ca9ef99",
+      "remote": "/home/box/irisx-failover-restore/20260906/profile-irisx/hooks/enrich_cached_video.py"
+    },
+    "profile/hooks/ig_og_fallback.py": {
+      "sha256": "23275d5be4f3f64f3436a7d9d28b6b76f7e7e6f95022a78d75a2d333532561ec",
+      "remote": "/home/box/irisx-failover-restore/20260906/profile-irisx/hooks/ig_og_fallback.py"
+    },
+    "profile/hooks/apify_ig_fallback.py": {
+      "sha256": "7822f16f447482124a150cb10314502a7b7513980c56087499985235a9e1938e",
+      "remote": "/home/box/irisx-failover-restore/20260906/profile-irisx/hooks/apify_ig_fallback.py"
+    },
+    "profile/hooks/render_takeaway.py": {
+      "sha256": "a77929cb123f7ee1f7522d3bd10493d8bd902f73adc8650897e627a54edfa944",
+      "remote": "/home/box/irisx-failover-restore/20260906/profile-irisx/hooks/render_takeaway.py"
+    },
+    "profile/hooks/brightdata_ig_fallback.py": {
+      "sha256": "5b37e9b03a688185844707d6778d184a53f05904f65b9c0a5be90e78002e344e",
+      "remote": "/home/box/irisx-failover-restore/20260906/profile-irisx/hooks/brightdata_ig_fallback.py"
+    },
+    "hermes/gateway/run_turn_runner.py": {
+      "sha256": "c2473f80b43a6af54ce6da3d26bc811d0224991beb4853e7dc14ff6ad73be180",
+      "remote": "/home/box/.hermes/hermes-agent/gateway/run_turn_runner.py"
+    },
+    "hermes/gateway/run_turn.py": {
+      "sha256": "6c81766d136810effa0fb793b1c947e8843a1fefb54a8f772eff25751639559b",
+      "remote": "/home/box/.hermes/hermes-agent/gateway/run_turn.py"
+    },
+    "hermes/gateway/turn_context.py": {
+      "sha256": "ad3457939ae047055bad7e4c69b3a094f7105d68304f7850f7c1cdbdfba97541",
+      "remote": "/home/box/.hermes/hermes-agent/gateway/turn_context.py"
+    },
+    "hermes/gateway/delivery.py": {
+      "sha256": "8295aad6ef269174afa261344205eea590d266457a2c12ab4927057446adf64b",
+      "remote": "/home/box/.hermes/hermes-agent/gateway/delivery.py"
+    },
+    "hermes/gateway/platforms/base.py": {
+      "sha256": "a88d38d591641c864f98efa8347aa31e8cb14161ecc8d623b60a8494f2ae528b",
+      "remote": "/home/box/.hermes/hermes-agent/gateway/platforms/base.py"
+    },
+    "hermes/hermes_cli/plugins_dispatch.py": {
+      "sha256": "bccbee91f62a4abae4f176c89eb64b8dbc232a0ad71a7467f51d9da31ee700b5",
+      "remote": "/home/box/.hermes/hermes-agent/hermes_cli/plugins_dispatch.py"
+    },
+    "hermes/hermes_cli/plugins.py": {
+      "sha256": "546c692e3f251bc8ef6920c0c1cfc94a26a892b4076c45aa75616e85dc48680b",
+      "remote": "/home/box/.hermes/hermes-agent/hermes_cli/plugins.py"
+    },
+    "hermes/hermes_cli/plugins_state.py": {
+      "sha256": "8769736eef903c9c68060d1775c5f2c6638567d3a6d2aca18c9297c26cb3bd3c",
+      "remote": "/home/box/.hermes/hermes-agent/hermes_cli/plugins_state.py"
+    },
+    "hermes/hermes_cli/plugins_discovery.py": {
+      "sha256": "dcbacf997838b67ba06933672ce16985a43403e9f266ba76e9731e781a01973f",
+      "remote": "/home/box/.hermes/hermes-agent/hermes_cli/plugins_discovery.py"
+    },
+    "hermes/hermes_cli/plugins_manifest.py": {
+      "sha256": "aa0d8ad9482ac86112fa4c25d35b4e5792a2cc00fc66f84cf3aec3a83b3823ff",
+      "remote": "/home/box/.hermes/hermes-agent/hermes_cli/plugins_manifest.py"
+    },
+    "hermes/hermes_cli/agent_plugins.py": {
+      "sha256": "47321441014282fccb9f90b09904b20366760e84e772d1a83bf5656a8376b006",
+      "remote": "/home/box/.hermes/hermes-agent/hermes_cli/agent_plugins.py"
+    },
+    "hermes/agent/turn_finalizer.py": {
+      "sha256": "602d3067c414e113331845c56152ae6234ca1882356c0817050ba2c75d1d2c44",
+      "remote": "/home/box/.hermes/hermes-agent/agent/turn_finalizer.py"
+    },
+    "hermes/agent/turn_context.py": {
+      "sha256": "b4c2891c330e85fb04de743234fa03856d5cfd1490d679f6f082eeed39f1b136",
+      "remote": "/home/box/.hermes/hermes-agent/agent/turn_context.py"
+    },
+    "hermes/agent/agent_init.py": {
+      "sha256": "ff051678e80721ad4e053f83b66b220fbffaeef28c441fdbd8c9a7e81bdd1a8b",
+      "remote": "/home/box/.hermes/hermes-agent/agent/agent_init.py"
+    },
+    "hermes/run_agent.py": {
+      "sha256": "9f789a3cd61821e8894882b6a035b6885d749a35ab045d9b16928bb4155b049c",
+      "remote": "/home/box/.hermes/hermes-agent/run_agent.py"
+    },
+    "hermes/plugins/platforms/line/adapter.py": {
+      "sha256": "a8f1b6c7a63b43137656d8c20b20c8f69c1a7829b476630795bde079f0692fcf",
+      "remote": "/home/box/.hermes/hermes-agent/plugins/platforms/line/adapter.py"
+    },
+    "hermes/plugins/platforms/line/__init__.py": {
+      "sha256": "1792e361eab0aea87bc38b61e2e200f55b885fcaf0ae1897d332d3bdffa722e6",
+      "remote": "/home/box/.hermes/hermes-agent/plugins/platforms/line/__init__.py"
+    },
+    "hermes/website/docs/developer-guide/plugins/index.md": {
+      "sha256": "2bf73a8bf51c701c9e341374d32eb847e0121eb77b1bd323c122b7710c76b4c2",
+      "remote": "/home/box/.hermes/hermes-agent/website/docs/developer-guide/plugins/index.md"
+    },
+    "profile/skills/media/video-timeline-pipeline/SKILL.md": {
+      "sha256": "9e0ce99b06bcf8fd09184309d087a1000935292b5aa6872d9352ae9274ab3ab8",
+      "remote": "/home/box/irisx-failover-restore/20260906/profile-irisx/skills/media/video-timeline-pipeline/SKILL.md"
+    }
+  }
+}

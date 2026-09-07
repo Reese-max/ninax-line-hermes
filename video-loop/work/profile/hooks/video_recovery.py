@@ -1,0 +1,348 @@
+"""Bounded, gap-directed recovery; persist an accepted remote task before polling it."""
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import sys
+import time
+from urllib.parse import urlencode
+
+from video_evidence import atomic_json, digest, identity, job_lock, read_json, run
+
+HERMES = '/home/box/.hermes/hermes-agent'
+
+
+def resolve_video_url(url):
+    import urllib.request
+    import socket
+    import ipaddress
+    from urllib.parse import urlsplit
+    from video_evidence import SHORT_HOSTS
+    parsed = urlsplit(url)
+    if parsed.hostname not in SHORT_HOSTS and '/share/' not in parsed.path:
+        return url
+    def allowed(target):
+        if not identity(target):
+            raise ValueError('unsafe_video_redirect')
+        host = urlsplit(target).hostname
+        if any(not ipaddress.ip_address(x[4][0]).is_global for x in socket.getaddrinfo(host,443)):
+            raise ValueError('unsafe_video_redirect')
+    class Redirect(urllib.request.HTTPRedirectHandler):
+        max_redirections = 4
+        def redirect_request(self,request,fp,code,msg,headers,newurl):
+            allowed(newurl)
+            return super().redirect_request(request,fp,code,msg,headers,newurl)
+    allowed(url)
+    request = urllib.request.Request(url,method='HEAD',headers={'User-Agent':'Mozilla/5.0'})
+    with urllib.request.build_opener(Redirect()).open(request,timeout=5) as response:
+        resolved = response.geturl()
+        allowed(resolved)
+        return identity(resolved)['url']
+
+
+def query_seeds(evidence):
+    source = evidence.get('source') or {}
+    author = str(evidence.get('author') or '').strip()
+    texts = [x['text'] for x in evidence.get('items', []) if x['kind'] in
+             {'caption', 'speech', 'untimed_transcript', 'visible_text'}]
+    unique = next((re.sub(r'https?://\S+|[#@]\S+', '', t).strip() for t in texts if len(t.strip()) >= 8), '')
+    # Only public source text; never include the user's private chat in a search query.
+    seeds = [f'"{source.get("id", "")}" {author}', f'{author} "{unique[:60]}"',
+             f'{author} {unique[:100]} 完整影片']
+    return list(dict.fromkeys(s.strip() for s in seeds if len(s.strip()) >= 6))[:3]
+
+
+def search_worker(query):
+    import urllib.request
+    # The discovered social vertical has no Instagram/YouTube type; search public source clues generally.
+    try:
+        body={'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':'search','arguments':{
+            'query':query,'domain':'general','max_results':3}}}
+        headers={'Content-Type':'application/json','X-Anysearch-Client':'skill/3.0.1'}
+        if os.environ.get('ANYSEARCH_API_KEY'):
+            headers['Authorization']='Bearer '+os.environ['ANYSEARCH_API_KEY']
+        request=urllib.request.Request('https://api.anysearch.com/mcp',data=json.dumps(body).encode(),headers=headers)
+        with urllib.request.urlopen(request,timeout=8) as response:
+            data=json.loads(response.read())
+        result=data.get('result',{})
+        if data.get('error') or result.get('isError') or not result.get('content'):
+            raise ValueError('anysearch_service_error')
+        text='\n'.join(c.get('text','') for c in result['content'] if c.get('type')=='text')
+        candidates=[{'title':title,'url':url} for title,url in re.findall(
+            r'### \d+\.\s*([^\n]+)\n-\s*\*\*URL\*\*:\s*(https://\S+)',text)]
+        return {'backend':'anysearch','ok':True,'candidates':candidates[:3]}
+    except Exception as exc:
+        fallback_reason='anysearch_'+type(exc).__name__
+    sys.path.insert(0, HERMES)
+    from tools.web_tools import web_search_tool, _get_search_backend
+    result = json.loads(web_search_tool(query, limit=3))
+    return {'backend': _get_search_backend(), 'ok': result.get('success', False),
+            'candidates': result.get('data', {}).get('web', [])[:3],'fallback_reason':fallback_reason}
+
+
+def search(evidence, deadline, ledger):
+    candidates = []
+    seen = set()
+    for query in query_seeds(evidence):
+        if time.monotonic() >= deadline or len(candidates) >= 3:
+            break
+        entry = {'stage': 'search', 'query': query, 'status': 'started'}
+        ledger.append(entry)
+        try:
+            result = run([sys.executable, str(Path(__file__)), '--search', query], deadline, timeout=12)
+            doc = json.loads(result.stdout) if result.returncode == 0 else {}
+            entry.update(status='completed' if doc.get('ok') else 'failed', backend=doc.get('backend'))
+            if doc.get('fallback_reason'):
+                entry['reason']=doc['fallback_reason']
+            for hit in doc.get('candidates', []):
+                candidate = identity(hit.get('url', ''))
+                if not candidate or candidate['url'] in seen:
+                    continue
+                seen.add(candidate['url'])
+                original = evidence.get('source') or {}
+                same = all(candidate.get(k) == original.get(k) for k in ('platform', 'id'))
+                candidates.append({'url': candidate['url'], 'title': str(hit.get('title') or '')[:300],
+                                   'description': str(hit.get('description') or '')[:1500],
+                                   'relation': 'same_video' if same else 'unverified_candidate'})
+                if len(candidates) >= 3:
+                    break
+        except Exception as exc:
+            entry.update(status='failed', reason=type(exc).__name__)
+    return candidates
+
+
+def refresh_metadata(url, job, deadline):
+    # yt-dlp obtains a fresh page/CDN URL without downloading an unrelated full video.
+    result = run(['yt-dlp', '--no-playlist', '--skip-download', '--dump-single-json', '--no-warnings',
+                  '--socket-timeout', '8', '--retries', '0', '--', url], deadline, timeout=22)
+    if result.returncode:
+        return False
+    info = json.loads(result.stdout)
+    wanted, actual = identity(url), identity(info.get('webpage_url') or '')
+    if not wanted or not actual or any(wanted[k] != actual[k] for k in ('platform', 'id')):
+        return False
+    urls = [f.get('url') for f in info.get('formats', []) if f.get('ext') == 'mp4'
+            and f.get('acodec') != 'none' and f.get('vcodec') != 'none']
+    if not urls:
+        return False
+    from enrich_cached_video import media_location
+    chosen = next((u for u in reversed(urls) if u and _allowed_media(u, media_location)), None)
+    if not chosen:
+        return False
+    raw = read_json(job / 'apify.item.json') or read_json(job / 'brightdata.item.json')
+    raw.pop('videoUrl',None)  # Do not let a stale Apify URL override the refreshed URL.
+    raw.update(video_url=chosen)
+    target = job / ('apify.item.json' if (job / 'apify.item.json').exists() else 'brightdata.item.json')
+    atomic_json(target, raw)
+    atomic_json(job/'source.info.json',{**read_json(job/'source.info.json'),**info})
+    return True
+
+
+def _allowed_media(url, validator):
+    try:
+        validator(url)
+        return True
+    except ValueError:
+        return False
+
+
+def align_transcripts(evidence, info, transcript):
+    """A matching title is insufficient: require creator and ordered, time-aligned speech anchors."""
+    normalize = lambda s: re.sub(r'[^\w\u4e00-\u9fff]','',str(s).casefold())
+    author = normalize(evidence.get('author') or '')
+    if not author or author not in {normalize(info.get('uploader')),normalize(info.get('uploader_id'))}:
+        return None
+    source_speech = [x for x in evidence.get('items',[]) if x['kind']=='speech' and len(normalize(x['text']))>=20]
+    target_segments = transcript.get('segments') or []
+    joined = ''
+    boundaries = []
+    for segment in target_segments:
+        normalized = normalize(segment.get('text',''))
+        boundaries.append((len(joined),len(normalized),segment))
+        joined += normalized
+    matches = []
+    seen = set()
+    for source in source_speech:
+        anchor = normalize(source['text'])
+        if anchor in seen:
+            continue
+        seen.add(anchor)
+        if joined.count(anchor)==1:
+            position = joined.index(anchor)
+            offset,size,target = next(x for x in boundaries if x[0]<=position<x[0]+x[1])
+            target_start = float(target['start'])+(position-offset)/size*(float(target['end'])-float(target['start']))
+            matches.append({'source_start':source['start'],'target_start':target_start,
+                            'offset':target_start-source['start'],'characters':len(anchor)})
+    if len(matches)<2 or sum(x['characters'] for x in matches)<60:
+        return None
+    matches.sort(key=lambda x:x['source_start'])
+    if (matches[-1]['source_start']-matches[0]['source_start']<5 or
+            any(a['target_start']>=b['target_start'] for a,b in zip(matches,matches[1:])) or
+            max(x['offset'] for x in matches)-min(x['offset'] for x in matches)>3):
+        return None
+    return {'method':'creator-and-unique-timed-speech','anchors':matches,
+            'offset_seconds':sum(x['offset'] for x in matches)/len(matches)}
+
+
+def recover_original(evidence, candidates, job, deadline, ledger):
+    if not evidence.get('author') or len([x for x in evidence.get('items',[]) if x['kind']=='speech'])<2:
+        return False
+    from video_evidence import matches
+    for candidate in candidates[:3]:
+        if candidate['relation']=='same_video' or time.monotonic()>=deadline-5:
+            continue
+        root = job/('source-candidate-'+digest(candidate['url'])[:12])
+        entry = {'stage':'verify_original_source','url':candidate['url'],'status':'started'}
+        ledger.append(entry)
+        try:
+            result = run(['/workspace/bin/video-pipeline','--url',candidate['url'],'--no-video',
+                          '--local-only','--root',str(root),'--workers','1'],deadline,timeout=20)
+            selected = next((p.parent for p in (root/'jobs').glob('*/source.info.json')
+                             if matches(p.parent,candidate['url'])),None)
+            if result.returncode or not selected:
+                entry.update(status='unverified',reason='source_subtitles_unavailable')
+                continue
+            info = read_json(selected/'source.info.json')
+            transcript = read_json(selected/'transcript.json')
+            alignment = align_transcripts(evidence,info,transcript)
+            duration = float(info.get('duration') or 0)
+            if not alignment or duration < float(evidence.get('duration') or 0):
+                entry.update(status='rejected',reason='identity_or_alignment_mismatch')
+                continue
+            verified = {'target':evidence['source'],'url':candidate['url'],'author':info.get('uploader'),
+                        'relation':'longer_original' if duration>float(evidence.get('duration') or 0)+3 else 'same_content_copy',
+                        'duration':duration,'verification':alignment,'segments':transcript.get('segments',[])}
+            atomic_json(job/'external-evidence.json',verified)
+            entry.update(status='verified',relation=verified['relation'],anchors=len(alignment['anchors']))
+            candidate['relation']=verified['relation']
+            return True
+        except Exception as exc:
+            entry.update(status='unverified',reason=type(exc).__name__)
+    return False
+
+
+def metered_fetch(url, state_path, deadline, jobs_root):
+    """One single-URL async request. Uncertain acceptance is never retriggered."""
+    state_path = Path(state_path)
+    state_path.parent.mkdir(parents=True,exist_ok=True)
+    with job_lock(state_path.parent,deadline,state_path.stem+'.lock'):
+        return _metered_fetch(url,state_path,deadline,jobs_root)
+
+
+def _metered_fetch(url, state_path, deadline, jobs_root):
+    import brightdata_ig_fallback as bright
+    import apify_ig_fallback as apify
+    bright.JOBS = apify.JOBS = Path(jobs_root)
+    wanted = identity(url)
+    if not wanted or wanted['platform'] != 'instagram':
+        return {'ok': False, 'reason': 'metered_source_not_supported'}
+    state = read_json(state_path)
+    old_identity = identity(state.get('url') or '')
+    if state and (not old_identity or any(old_identity[k] != wanted[k] for k in ('platform','id'))):
+        raise ValueError('provider_request_identity_mismatch')
+    history = state.get('history',[])
+    if state.get('status') in {'failed','completed'} and time.time()-state.get('started_at',time.time()) > 300:
+        history = (history+[{k:state.get(k) for k in ('backend','remote_task_id','status','started_at')}])[-20:]
+        state = {}
+    if state.get('status') in {'starting', 'unknown', 'failed', 'completed'}:
+        return {**state, 'resumed': True}
+    backend = state.get('backend') or ('brightdata' if bright.token() else 'apify')
+    tok = bright.token() if backend == 'brightdata' else apify.token()
+    if not tok:
+        return {'ok': False, 'reason': 'provider_not_configured'}
+    if not state:
+        state = {'url': wanted['url'], 'backend': backend, 'status': 'starting', 'started_at': time.time(),
+                 'metered_requests': 1, 'history':history}
+        atomic_json(state_path, state)  # A lost POST response must not create a second billable run.
+        try:
+            if backend == 'brightdata':
+                query = urlencode({'dataset_id': bright.DATASET_ID, 'include_errors': 'true', 'format': 'json'})
+                result = bright.http_json('POST', f'{bright.API_ROOT}/trigger?{query}', tok,
+                                          {'input': [{'url': wanted['url']}]}, timeout=12)
+                remote_id = result.get('snapshot_id')
+            else:
+                result = apify.api(tok, 'POST', '/acts/apify~instagram-reel-scraper/runs?waitForFinish=0',
+                                   {'username': [wanted['url']], 'resultsLimit': 1, 'includeTranscript': True,
+                                    'includeDownloadedVideo': False}, timeout=12)['data']
+                remote_id = result.get('id')
+        except Exception as exc:
+            match=re.match(r'http_(\d+):',str(exc))
+            code=getattr(exc,'code',None) or (int(match.group(1)) if match else None)
+            rejected=code in {400,401,403,404,422,429}
+            state.update(ok=False,status='failed' if rejected else 'unknown',
+                         reason='provider_http_'+str(code) if code else type(exc).__name__,
+                         metered_requests=0 if rejected else 1)
+            atomic_json(state_path,state)
+            return state
+        state.update(remote_task_id=remote_id, status='pending' if remote_id else 'unknown')
+        atomic_json(state_path, state)
+    remote_id = state.get('remote_task_id')
+    if not remote_id:
+        return state
+    items = None
+    while time.monotonic() < deadline - 2:
+        if backend == 'brightdata':
+            progress = bright.http_json('GET', f'{bright.API_ROOT}/progress/{remote_id}', tok, timeout=8)
+            status = progress.get('status')
+            if status == 'ready':
+                items = bright.http_json('GET', f'{bright.API_ROOT}/snapshot/{remote_id}?format=json', tok, timeout=10)
+        else:
+            progress = apify.api(tok, 'GET', f'/actor-runs/{remote_id}', timeout=8)['data']
+            status = progress.get('status')
+            if status == 'SUCCEEDED':
+                items = apify.dataset_items(tok, progress)
+        if status in {'failed', 'FAILED', 'ABORTED', 'TIMED-OUT'}:
+            state.update(ok=False,status='failed',reason='provider_task_failed')
+            atomic_json(state_path,state)
+            return state
+        if items is not None:
+            break
+        time.sleep(min(2, max(0, deadline-time.monotonic())))
+    if items is None:
+        return state  # The task ID is durable; a later turn polls it without a new POST.
+    items = items if isinstance(items, list) else items.get('data', [])
+    hit = next((x for x in items if _same_record(x, wanted)), None)
+    if not hit:
+        state.update(ok=False, status='failed', reason='source_identity_mismatch')
+    else:
+        job = (bright.write_job(url, wanted['id'], hit, 'datasets-async', 'instagram') if backend == 'brightdata'
+               else apify.write_job(url, wanted['id'], hit))
+        state.update(ok=True, status='completed', job=str(job))
+    atomic_json(state_path, state)
+    return state
+
+
+def _same_record(item, wanted):
+    if item.get('error') or item.get('success') is False:
+        return False
+    actual = identity(item.get('url') or item.get('post_url') or '')
+    code = item.get('shortcode') or item.get('shortCode') or item.get('postCode')
+    return bool((actual and all(actual[k] == wanted[k] for k in ('platform', 'id')))
+                or (code and str(code) == wanted['id']))
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--search')
+    parser.add_argument('--resolve')
+    parser.add_argument('--fetch')
+    parser.add_argument('--refresh')
+    parser.add_argument('--job')
+    parser.add_argument('--state')
+    parser.add_argument('--jobs-root', default='/workspace/video-timeline-pipeline/jobs')
+    parser.add_argument('--seconds', type=float, default=40)
+    args = parser.parse_args()
+    try:
+        if args.resolve:
+            result = {'url':resolve_video_url(args.resolve)}
+        elif args.search:
+            result = search_worker(args.search)
+        elif args.refresh:
+            result = {'ok': refresh_metadata(args.refresh, Path(args.job), time.monotonic()+args.seconds)}
+        else:
+            result = metered_fetch(args.fetch, Path(args.state), time.monotonic()+args.seconds, args.jobs_root)
+        print(json.dumps(result, ensure_ascii=False))
+    except Exception as exc:
+        print(json.dumps({'ok': False, 'reason': type(exc).__name__}))
+        raise SystemExit(1)

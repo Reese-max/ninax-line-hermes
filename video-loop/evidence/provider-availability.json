@@ -1,0 +1,12 @@
+{
+  "brightdata": {
+    "error": "HTTPError",
+    "http": 403,
+    "token_present": true
+  },
+  "apify": {
+    "error": "HTTPError",
+    "http": 401,
+    "token_present": false
+  }
+}

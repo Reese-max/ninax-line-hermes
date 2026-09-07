@@ -1,0 +1,542 @@
+[
+  {
+    "case": "complete",
+    "expected_pass": true,
+    "actual_pass": true,
+    "audit": {
+      "status": "pass",
+      "coverage": [
+        {
+          "id": "M1",
+          "status": "covered",
+          "summary_quote": "先拔掉電源，等待 30 秒，並在綠燈亮起後才重新接上電源。",
+          "evidence_ids": [
+            "E1"
+          ]
+        },
+        {
+          "id": "M2",
+          "status": "covered",
+          "summary_quote": "畫面顯示充電上限 20%。",
+          "evidence_ids": [
+            "E2"
+          ]
+        },
+        {
+          "id": "M3",
+          "status": "covered",
+          "summary_quote": "如果綠燈未亮就停止，此時無法完成；成功時畫面顯示「設定完成」。",
+          "evidence_ids": [
+            "E3"
+          ]
+        }
+      ],
+      "unsupported": [],
+      "omitted_evidence": [],
+      "contradictions": [],
+      "provenance_errors": [],
+      "limitations_accurate": true,
+      "revision_instructions": ""
+    },
+    "calls": [
+      {
+        "stage": "audit",
+        "status": "completed",
+        "exit_code": 0,
+        "seconds": 8.23,
+        "result": {
+          "status": "pass",
+          "coverage": [
+            {
+              "id": "M1",
+              "status": "covered",
+              "summary_quote": "先拔掉電源，等待 30 秒，並在綠燈亮起後才重新接上電源。",
+              "evidence_ids": [
+                "E1"
+              ]
+            },
+            {
+              "id": "M2",
+              "status": "covered",
+              "summary_quote": "畫面顯示充電上限 20%。",
+              "evidence_ids": [
+                "E2"
+              ]
+            },
+            {
+              "id": "M3",
+              "status": "covered",
+              "summary_quote": "如果綠燈未亮就停止，此時無法完成；成功時畫面顯示「設定完成」。",
+              "evidence_ids": [
+                "E3"
+              ]
+            }
+          ],
+          "unsupported": [],
+          "omitted_evidence": [],
+          "contradictions": [],
+          "provenance_errors": [],
+          "limitations_accurate": true,
+          "revision_instructions": ""
+        }
+      }
+    ]
+  },
+  {
+    "case": "omitted_ending",
+    "expected_pass": false,
+    "actual_pass": false,
+    "audit": {
+      "status": "revise",
+      "coverage": [
+        {
+          "id": "M1",
+          "status": "covered",
+          "summary_quote": "先拔掉電源，等待 30 秒，並在綠燈亮起後才重新接上電源。",
+          "evidence_ids": [
+            "E1"
+          ]
+        },
+        {
+          "id": "M2",
+          "status": "covered",
+          "summary_quote": "畫面顯示充電上限 20%。",
+          "evidence_ids": [
+            "E2"
+          ]
+        },
+        {
+          "id": "M3",
+          "status": "missing",
+          "summary_quote": "最後檢查畫面，便能了解影片主題與操作流程。",
+          "evidence_ids": [
+            "E3"
+          ]
+        }
+      ],
+      "unsupported": [
+        "「最後檢查畫面，便能了解影片主題與操作流程」未獲證據支持，且未表達成功畫面會顯示「設定完成」。"
+      ],
+      "omitted_evidence": [
+        {
+          "evidence_ids": [
+            "E3"
+          ],
+          "why_material": "摘要省略了綠燈未亮時必須停止且無法完成的失敗條件，也省略了成功時畫面顯示「設定完成」的結論；缺少這兩點會使讀者無法判斷何時中止操作，以及如何確認操作成功。"
+        }
+      ],
+      "contradictions": [],
+      "provenance_errors": [],
+      "limitations_accurate": true,
+      "revision_instructions": "保留拔電、等待 30 秒及綠燈亮後再接電的步驟，並補充：若綠燈沒有亮就停止，無法完成；成功時畫面會顯示「設定完成」。刪除「最後檢查畫面，便能了解影片主題與操作流程」這句無依據的概括。"
+    },
+    "calls": [
+      {
+        "stage": "audit",
+        "status": "completed",
+        "exit_code": 0,
+        "seconds": 16.86,
+        "result": {
+          "status": "revise",
+          "coverage": [
+            {
+              "id": "M1",
+              "status": "covered",
+              "summary_quote": "先拔掉電源，等待 30 秒，並在綠燈亮起後才重新接上電源。",
+              "evidence_ids": [
+                "E1"
+              ]
+            },
+            {
+              "id": "M2",
+              "status": "covered",
+              "summary_quote": "畫面顯示充電上限 20%。",
+              "evidence_ids": [
+                "E2"
+              ]
+            },
+            {
+              "id": "M3",
+              "status": "missing",
+              "summary_quote": "最後檢查畫面，便能了解影片主題與操作流程。",
+              "evidence_ids": [
+                "E3"
+              ]
+            }
+          ],
+          "unsupported": [
+            "「最後檢查畫面，便能了解影片主題與操作流程」未獲證據支持，且未表達成功畫面會顯示「設定完成」。"
+          ],
+          "omitted_evidence": [
+            {
+              "evidence_ids": [
+                "E3"
+              ],
+              "why_material": "摘要省略了綠燈未亮時必須停止且無法完成的失敗條件，也省略了成功時畫面顯示「設定完成」的結論；缺少這兩點會使讀者無法判斷何時中止操作，以及如何確認操作成功。"
+            }
+          ],
+          "contradictions": [],
+          "provenance_errors": [],
+          "limitations_accurate": true,
+          "revision_instructions": "保留拔電、等待 30 秒及綠燈亮後再接電的步驟，並補充：若綠燈沒有亮就停止，無法完成；成功時畫面會顯示「設定完成」。刪除「最後檢查畫面，便能了解影片主題與操作流程」這句無依據的概括。"
+        }
+      }
+    ]
+  },
+  {
+    "case": "changed_numbers",
+    "expected_pass": false,
+    "actual_pass": false,
+    "audit": {
+      "status": "revise",
+      "coverage": [
+        {
+          "id": "M1",
+          "status": "missing",
+          "summary_quote": "先拔掉電源，等待 3 秒，並在綠燈亮起後才重新接上電源。",
+          "evidence_ids": [
+            "E1"
+          ]
+        },
+        {
+          "id": "M2",
+          "status": "missing",
+          "summary_quote": "畫面顯示充電上限 200%。",
+          "evidence_ids": [
+            "E2"
+          ]
+        },
+        {
+          "id": "M3",
+          "status": "covered",
+          "summary_quote": "如果綠燈未亮就停止，此時無法完成；成功時畫面顯示「設定完成」。",
+          "evidence_ids": [
+            "E3"
+          ]
+        }
+      ],
+      "unsupported": [],
+      "omitted_evidence": [],
+      "contradictions": [
+        "M1 將語音中的等待時間「30 秒」錯寫為「3 秒」。",
+        "M2 將畫面文字「充電上限 20%」錯寫為「200%」。"
+      ],
+      "provenance_errors": [],
+      "limitations_accurate": true,
+      "revision_instructions": "將「等待 3 秒」修正為「等待 30 秒」；將「充電上限 200%」修正為「充電上限 20%」。保留先拔掉電源、綠燈亮起前不要重新接上電源、綠燈未亮時停止且無法完成，以及成功時顯示「設定完成」等條件與結論。"
+    },
+    "calls": [
+      {
+        "stage": "audit",
+        "status": "completed",
+        "exit_code": 0,
+        "seconds": 14.01,
+        "result": {
+          "status": "revise",
+          "coverage": [
+            {
+              "id": "M1",
+              "status": "missing",
+              "summary_quote": "先拔掉電源，等待 3 秒，並在綠燈亮起後才重新接上電源。",
+              "evidence_ids": [
+                "E1"
+              ]
+            },
+            {
+              "id": "M2",
+              "status": "missing",
+              "summary_quote": "畫面顯示充電上限 200%。",
+              "evidence_ids": [
+                "E2"
+              ]
+            },
+            {
+              "id": "M3",
+              "status": "covered",
+              "summary_quote": "如果綠燈未亮就停止，此時無法完成；成功時畫面顯示「設定完成」。",
+              "evidence_ids": [
+                "E3"
+              ]
+            }
+          ],
+          "unsupported": [],
+          "omitted_evidence": [],
+          "contradictions": [
+            "M1 將語音中的等待時間「30 秒」錯寫為「3 秒」。",
+            "M2 將畫面文字「充電上限 20%」錯寫為「200%」。"
+          ],
+          "provenance_errors": [],
+          "limitations_accurate": true,
+          "revision_instructions": "將「等待 3 秒」修正為「等待 30 秒」；將「充電上限 200%」修正為「充電上限 20%」。保留先拔掉電源、綠燈亮起前不要重新接上電源、綠燈未亮時停止且無法完成，以及成功時顯示「設定完成」等條件與結論。"
+        }
+      }
+    ]
+  },
+  {
+    "case": "reversed_condition",
+    "expected_pass": false,
+    "actual_pass": false,
+    "audit": {
+      "status": "revise",
+      "coverage": [
+        {
+          "id": "M1",
+          "status": "covered",
+          "summary_quote": "先拔掉電源，等待 30 秒，並在綠燈亮起後才重新接上電源。",
+          "evidence_ids": [
+            "E1"
+          ]
+        },
+        {
+          "id": "M2",
+          "status": "covered",
+          "summary_quote": "畫面顯示充電上限 20%。",
+          "evidence_ids": [
+            "E2"
+          ]
+        },
+        {
+          "id": "M3",
+          "status": "missing",
+          "summary_quote": "如果綠燈未亮仍繼續，此時無法完成；成功時畫面顯示「設定完成」。",
+          "evidence_ids": [
+            "E3"
+          ]
+        }
+      ],
+      "unsupported": [],
+      "omitted_evidence": [],
+      "contradictions": [
+        {
+          "description": "line_messages 將 E3 的條件說反：原證據要求綠燈未亮時停止，送出文字卻寫成「如果綠燈未亮仍繼續」。",
+          "evidence_ids": [
+            "E3"
+          ]
+        }
+      ],
+      "provenance_errors": [],
+      "limitations_accurate": true,
+      "revision_instructions": "將「如果綠燈未亮仍繼續，此時無法完成」改為「如果綠燈未亮，就停止，無法完成」；保留成功時畫面顯示「設定完成」及其 00:48 語音標示。"
+    },
+    "calls": [
+      {
+        "stage": "audit",
+        "status": "completed",
+        "exit_code": 0,
+        "seconds": 11.35,
+        "result": {
+          "status": "revise",
+          "coverage": [
+            {
+              "id": "M1",
+              "status": "covered",
+              "summary_quote": "先拔掉電源，等待 30 秒，並在綠燈亮起後才重新接上電源。",
+              "evidence_ids": [
+                "E1"
+              ]
+            },
+            {
+              "id": "M2",
+              "status": "covered",
+              "summary_quote": "畫面顯示充電上限 20%。",
+              "evidence_ids": [
+                "E2"
+              ]
+            },
+            {
+              "id": "M3",
+              "status": "missing",
+              "summary_quote": "如果綠燈未亮仍繼續，此時無法完成；成功時畫面顯示「設定完成」。",
+              "evidence_ids": [
+                "E3"
+              ]
+            }
+          ],
+          "unsupported": [],
+          "omitted_evidence": [],
+          "contradictions": [
+            {
+              "description": "line_messages 將 E3 的條件說反：原證據要求綠燈未亮時停止，送出文字卻寫成「如果綠燈未亮仍繼續」。",
+              "evidence_ids": [
+                "E3"
+              ]
+            }
+          ],
+          "provenance_errors": [],
+          "limitations_accurate": true,
+          "revision_instructions": "將「如果綠燈未亮仍繼續，此時無法完成」改為「如果綠燈未亮，就停止，無法完成」；保留成功時畫面顯示「設定完成」及其 00:48 語音標示。"
+        }
+      }
+    ]
+  },
+  {
+    "case": "checklist_misses_ending",
+    "expected_pass": false,
+    "actual_pass": false,
+    "audit": {
+      "status": "revise",
+      "coverage": [
+        {
+          "id": "M1",
+          "status": "covered",
+          "summary_quote": "先拔掉電源，等待 30 秒，並在綠燈亮起後才重新接上電源。",
+          "evidence_ids": [
+            "E1"
+          ]
+        },
+        {
+          "id": "M2",
+          "status": "covered",
+          "summary_quote": "畫面顯示充電上限 20%。",
+          "evidence_ids": [
+            "E2"
+          ]
+        }
+      ],
+      "unsupported": [],
+      "omitted_evidence": [
+        {
+          "evidence_id": "E3",
+          "why_material": "摘要省略了綠燈未亮時必須停止且無法完成的失敗條件，也省略了成功時畫面顯示「設定完成」的結論；缺少這些內容會使操作限制與完成判定不完整。"
+        }
+      ],
+      "contradictions": [],
+      "provenance_errors": [],
+      "limitations_accurate": true,
+      "revision_instructions": "補充：若綠燈沒有亮，必須停止，操作無法完成；成功時畫面會顯示「設定完成」。並保留現有的逐幀檢視限制說明與時間／資料類型標示。"
+    },
+    "calls": [
+      {
+        "stage": "audit",
+        "status": "completed",
+        "exit_code": 0,
+        "seconds": 11.31,
+        "result": {
+          "status": "revise",
+          "coverage": [
+            {
+              "id": "M1",
+              "status": "covered",
+              "summary_quote": "先拔掉電源，等待 30 秒，並在綠燈亮起後才重新接上電源。",
+              "evidence_ids": [
+                "E1"
+              ]
+            },
+            {
+              "id": "M2",
+              "status": "covered",
+              "summary_quote": "畫面顯示充電上限 20%。",
+              "evidence_ids": [
+                "E2"
+              ]
+            }
+          ],
+          "unsupported": [],
+          "omitted_evidence": [
+            {
+              "evidence_id": "E3",
+              "why_material": "摘要省略了綠燈未亮時必須停止且無法完成的失敗條件，也省略了成功時畫面顯示「設定完成」的結論；缺少這些內容會使操作限制與完成判定不完整。"
+            }
+          ],
+          "contradictions": [],
+          "provenance_errors": [],
+          "limitations_accurate": true,
+          "revision_instructions": "補充：若綠燈沒有亮，必須停止，操作無法完成；成功時畫面會顯示「設定完成」。並保留現有的逐幀檢視限制說明與時間／資料類型標示。"
+        }
+      }
+    ]
+  },
+  {
+    "case": "wrong_time",
+    "expected_pass": false,
+    "actual_pass": false,
+    "audit": {
+      "status": "revise",
+      "coverage": [
+        {
+          "id": "M1",
+          "status": "covered",
+          "summary_quote": "先拔掉電源，等待 30 秒，並在綠燈亮起後才重新接上電源。［00:00 語音］",
+          "evidence_ids": [
+            "E1"
+          ]
+        },
+        {
+          "id": "M2",
+          "status": "covered",
+          "summary_quote": "畫面顯示充電上限 20%。［01:24 畫面文字］",
+          "evidence_ids": [
+            "E2"
+          ]
+        },
+        {
+          "id": "M3",
+          "status": "covered",
+          "summary_quote": "如果綠燈未亮就停止，此時無法完成；成功時畫面顯示「設定完成」。［00:48 語音］",
+          "evidence_ids": [
+            "E3"
+          ]
+        }
+      ],
+      "unsupported": [],
+      "omitted_evidence": [],
+      "contradictions": [],
+      "provenance_errors": [
+        {
+          "evidence_id": "E2",
+          "issue": "時間標示錯誤：E2 發生於 24 秒，應顯示為［00:24 畫面文字］，目前的［01:24］超出影片 60 秒長度。"
+        }
+      ],
+      "limitations_accurate": true,
+      "revision_instructions": "將 E2 的時間引用由［01:24 畫面文字］修正為［00:24 畫面文字］；其餘摘要已涵蓋必要操作、條件、結果與未逐幀檢視的限制。"
+    },
+    "calls": [
+      {
+        "stage": "audit",
+        "status": "completed",
+        "exit_code": 0,
+        "seconds": 16.16,
+        "result": {
+          "status": "revise",
+          "coverage": [
+            {
+              "id": "M1",
+              "status": "covered",
+              "summary_quote": "先拔掉電源，等待 30 秒，並在綠燈亮起後才重新接上電源。［00:00 語音］",
+              "evidence_ids": [
+                "E1"
+              ]
+            },
+            {
+              "id": "M2",
+              "status": "covered",
+              "summary_quote": "畫面顯示充電上限 20%。［01:24 畫面文字］",
+              "evidence_ids": [
+                "E2"
+              ]
+            },
+            {
+              "id": "M3",
+              "status": "covered",
+              "summary_quote": "如果綠燈未亮就停止，此時無法完成；成功時畫面顯示「設定完成」。［00:48 語音］",
+              "evidence_ids": [
+                "E3"
+              ]
+            }
+          ],
+          "unsupported": [],
+          "omitted_evidence": [],
+          "contradictions": [],
+          "provenance_errors": [
+            {
+              "evidence_id": "E2",
+              "issue": "時間標示錯誤：E2 發生於 24 秒，應顯示為［00:24 畫面文字］，目前的［01:24］超出影片 60 秒長度。"
+            }
+          ],
+          "limitations_accurate": true,
+          "revision_instructions": "將 E2 的時間引用由［01:24 畫面文字］修正為［00:24 畫面文字］；其餘摘要已涵蓋必要操作、條件、結果與未逐幀檢視的限制。"
+        }
+      }
+    ]
+  }
+]

@@ -1,0 +1,26 @@
+{
+  "status": "PASS",
+  "checks": {
+    "/health": 200,
+    "/line/webhook/health": 200,
+    "signed_empty_webhook": 200,
+    "bot_info": 200,
+    "official_webhook": 200
+  },
+  "old_pid": 1227872,
+  "pid": 1227872,
+  "start_time": 33084424,
+  "bot_name": "NINAX",
+  "guard_pid": 1123259,
+  "lease": {
+    "active": true,
+    "holder": "standby-cursor-grokbot",
+    "generation": 8,
+    "expires_at": 1788786139.044
+  },
+  "gateway_state": "running",
+  "line_state": "connected",
+  "real_line_message_sent": false,
+  "phone_acceptance": "pending",
+  "time": 1788786082.9337282
+}

@@ -1,0 +1,15 @@
+{
+  "command": [
+    "bash",
+    "scripts/run_tests.sh",
+    "-j",
+    "2",
+    "tests/gateway/test_line_plugin.py",
+    "tests/gateway/test_stream_final_contract.py",
+    "tests/gateway/test_stream_final_adoption_gate.py",
+    "/home/box/irisx-failover-restore/20260906/repair-20260907/video-loop/test_custom_turn.py",
+    "-q"
+  ],
+  "exit_code": 0,
+  "tested_modified_core": true
+}

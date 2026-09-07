@@ -1,0 +1,6 @@
+name: line-platform
+label: LINE
+kind: platform
+version: 1.0.1
+description: NINAX LINE adapter with bounded video recovery and audited delivery.
+author: Local NINAX profile

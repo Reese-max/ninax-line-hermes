@@ -1,0 +1,100 @@
+{
+  "time": "2026-09-07T12:07:01.088361+00:00",
+  "files": [
+    {
+      "path": "/home/box/.hermes/hermes-agent/gateway/run_turn_runner.py",
+      "backup": "/home/box/.hermes/hermes-agent/gateway/run_turn_runner.py.bak-20260907",
+      "before_sha256": "c2473f80b43a6af54ce6da3d26bc811d0224991beb4853e7dc14ff6ad73be180",
+      "after_sha256": "2887ac8d3e6d4afd4366e53a8142b392f3e7e0dbd43c747bf4856beffc147b1d"
+    },
+    {
+      "path": "/home/box/irisx-failover-restore/20260906/profile-irisx/hooks/video_evidence.py",
+      "backup": null,
+      "before_sha256": null,
+      "after_sha256": "18c52d382d29637bd908dff2fd91bd172f12323facd4bc4d14ab53cdec60c546"
+    },
+    {
+      "path": "/home/box/irisx-failover-restore/20260906/profile-irisx/hooks/enrich_cached_video.py",
+      "backup": "/home/box/irisx-failover-restore/20260906/profile-irisx/hooks/enrich_cached_video.py.bak-20260907-120701",
+      "before_sha256": "6217e787c3fb5def41ea7cc33986210a7a88509be50503bcbea60e345ca9ef99",
+      "after_sha256": "d21692b3c007f39f62cb03c96411275777180fb271c15bbdc57a49789ad5c9e5"
+    },
+    {
+      "path": "/home/box/irisx-failover-restore/20260906/profile-irisx/hooks/video_takeaway_cascade.py",
+      "backup": "/home/box/irisx-failover-restore/20260906/profile-irisx/hooks/video_takeaway_cascade.py.bak-20260907-120701",
+      "before_sha256": "f2fee4619a1090b6c01a825382d6bbe950cfebd8556ee3d704abb78562cde61f",
+      "after_sha256": "36539b4be8b4f5dd931917551499efee9383cfa645d3a82ff52a776633e8172e"
+    },
+    {
+      "path": "/home/box/irisx-failover-restore/20260906/profile-irisx/hooks/video_recovery.py",
+      "backup": null,
+      "before_sha256": null,
+      "after_sha256": "e79d91da13f4b1db601c4d4242354765f96bae3768d28f919b1b05224d859129"
+    },
+    {
+      "path": "/home/box/irisx-failover-restore/20260906/profile-irisx/hooks/video_review.py",
+      "backup": null,
+      "before_sha256": null,
+      "after_sha256": "1234beca7604b5a520b0e2d5ca88c92613b2b16db17f9d42a0483d31904e55dc"
+    },
+    {
+      "path": "/home/box/irisx-failover-restore/20260906/profile-irisx/hooks/video_workflow.py",
+      "backup": null,
+      "before_sha256": null,
+      "after_sha256": "6b9c2f278b3090cf82f807c328367b8814de3660e7965e039eeff1b7e7212b6c"
+    },
+    {
+      "path": "/home/box/irisx-failover-restore/20260906/profile-irisx/plugins/line-platform/plugin.yaml",
+      "backup": null,
+      "before_sha256": null,
+      "after_sha256": "ddc6706d8504d391a108f66cb51081c392f53dfa9acbc939d2e35840803d61b7"
+    },
+    {
+      "path": "/home/box/irisx-failover-restore/20260906/profile-irisx/plugins/line-platform/__init__.py",
+      "backup": null,
+      "before_sha256": null,
+      "after_sha256": "1a8f418bc076736782d806bf55858dd64ced80f145ecc1d6d20515c65d2af518"
+    },
+    {
+      "path": "/home/box/irisx-failover-restore/20260906/profile-irisx/plugins/line-platform/README.md",
+      "backup": null,
+      "before_sha256": null,
+      "after_sha256": "a1b6c80e0ac72fd35e394b30dcf43fa1fe9a207273d0ddf9df00dc798d08647a"
+    },
+    {
+      "path": "/home/box/irisx-failover-restore/20260906/profile-irisx/skills/media/video-timeline-pipeline/SKILL.md",
+      "backup": "/home/box/irisx-failover-restore/20260906/profile-irisx/skills/media/video-timeline-pipeline/SKILL.md.bak-20260907",
+      "before_sha256": "9e0ce99b06bcf8fd09184309d087a1000935292b5aa6872d9352ae9274ab3ab8",
+      "after_sha256": "be236165415f5cf10ae5a78c3933bc476d988b7ecab58f63b61cc871fa67f6f6"
+    },
+    {
+      "path": "/home/box/irisx-failover-restore/20260906/profile-irisx/config.yaml",
+      "backup": "/home/box/irisx-failover-restore/20260906/profile-irisx/config.yaml.bak-20260907-120701",
+      "before_sha256": "43cca379b51a6be065d4eadbb8ffa6c68781c801cb549ead7d16396f941ad1e6",
+      "after_sha256": "be1220a88f1e23c16de9e6b9814e82bd3fa52a6a692672833e9230c187b2f658"
+    }
+  ],
+  "updates": [
+    {
+      "time": "2026-09-07T13:01:20.709781+00:00",
+      "path": "/home/box/irisx-failover-restore/20260906/profile-irisx/hooks/enrich_cached_video.py",
+      "backup": "/home/box/irisx-failover-restore/20260906/profile-irisx/hooks/enrich_cached_video.py.bak-20260907-130120",
+      "before_sha256": "136937a3bce9d5b14aa809c71039e78f08d433196dafb3da8db75113bc4cf4ec",
+      "after_sha256": "d21692b3c007f39f62cb03c96411275777180fb271c15bbdc57a49789ad5c9e5"
+    },
+    {
+      "time": "2026-09-07T13:01:20.711867+00:00",
+      "path": "/home/box/irisx-failover-restore/20260906/profile-irisx/hooks/video_takeaway_cascade.py",
+      "backup": "/home/box/irisx-failover-restore/20260906/profile-irisx/hooks/video_takeaway_cascade.py.bak-20260907-130120",
+      "before_sha256": "4d451be12b8477e41ba8623a7935bd98177ba6512718a9232114b891ac8416d3",
+      "after_sha256": "36539b4be8b4f5dd931917551499efee9383cfa645d3a82ff52a776633e8172e"
+    },
+    {
+      "time": "2026-09-07T13:01:20.713268+00:00",
+      "path": "/home/box/irisx-failover-restore/20260906/profile-irisx/hooks/video_review.py",
+      "backup": "/home/box/irisx-failover-restore/20260906/profile-irisx/hooks/video_review.py.bak-20260907-130120",
+      "before_sha256": "d3ae3233a29d36a338e583c22a94e3df9cb2a10c3669e1641f9bbf7fc8d987f1",
+      "after_sha256": "1234beca7604b5a520b0e2d5ca88c92613b2b16db17f9d42a0483d31904e55dc"
+    }
+  ]
+}

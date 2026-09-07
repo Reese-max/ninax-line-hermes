@@ -1,0 +1,22 @@
+{
+  "utc": "2026-09-07T07:15:14Z",
+  "repair_deployed": true,
+  "technical_verification": "PASS",
+  "exit_code": 0,
+  "production_files_hash_matched": 6,
+  "backups_verified": 8,
+  "gateway_pid": 1123144,
+  "guard_pid": 1123259,
+  "lease_holder": "standby-cursor-grokbot",
+  "lease_generation": 8,
+  "provider": "openai-codex",
+  "model": "gpt-5.3-codex-spark",
+  "fallback_model": "gpt-5.6-luna",
+  "native_tool_roundtrip": "PASS",
+  "line_adapter_gateway_tool_flow": "PASS",
+  "line_adapter_gateway_video_flow": "PASS",
+  "signed_public_webhook_http": 200,
+  "post_restart_errors": 0,
+  "phone_acceptance": "pending_user",
+  "real_line_messages_sent_by_repair": 0
+}

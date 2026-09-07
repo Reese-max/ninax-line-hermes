@@ -1,0 +1,21 @@
+diff --git a/gateway/run_turn_runner.py b/gateway/run_turn_runner.py
+index 6449454..0518645 100644
+--- a/gateway/run_turn_runner.py
++++ b/gateway/run_turn_runner.py
+@@ -1608,6 +1608,16 @@ class TurnRunner:
+         from gateway.run import _current_max_iterations, _normalize_empty_agent_response, _sanitize_gateway_final_response
+         ctx = self._ctx
+         runner = self._runner
++        # Platform plugins may own a bounded non-streaming turn after normal gateway auth.
++        # None delegates to the ordinary agent; exceptions must not fall through into a second response.
++        adapter = runner._adapter_for_source(ctx.source)
++        custom_turn = getattr(type(adapter), 'run_custom_turn', None)
++        if callable(custom_turn):
++            custom_result = custom_turn(adapter, ctx)
++            if custom_result is not None:
++                if not isinstance(custom_result, dict):
++                    raise TypeError('Platform run_custom_turn must return a result dict or None')
++                return custom_result
+         # Platform.LOCAL ("local") maps to the "cli" hint key the agent understands.
+         # session_key is propagated via contextvars in _set_session_env() (_SESSION_KEY) and via
+         # set_current_session_key() (_approval_session_key) below — both concurrency-safe and inherited by

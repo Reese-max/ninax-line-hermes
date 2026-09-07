@@ -1,0 +1,8 @@
+{
+  "gate": "release-artifacts",
+  "status": "PASS",
+  "files_match_deployment": 11,
+  "implementation_sha256": "f652d14b85ec873b3722a2e35a85c54515ca0898499fb32e5c083fb99c28cab2",
+  "phone_acceptance": "pending",
+  "exit_code": 0
+}

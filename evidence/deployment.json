@@ -1,0 +1,29 @@
+{
+  "backups": [
+    "/home/box/irisx-failover-restore/20260906/profile-irisx/hooks/video-url-prefetch.sh.bak-20260907",
+    "/home/box/irisx-failover-restore/20260906/gate-e/bin/irisx_guard.py.bak-20260907",
+    "/home/box/irisx-failover-restore/20260906/profile-irisx/hooks/render_takeaway.py.bak-20260907",
+    "/home/box/irisx-failover-restore/20260906/gate-e/standby/run-watch.sh.bak-20260907",
+    "/home/box/irisx-failover-restore/20260906/profile-irisx/hooks/video_takeaway_cascade.py.bak-20260907",
+    "/home/box/irisx-failover-restore/20260906/profile-irisx/config.yaml.bak-20260907",
+    "/home/box/irisx-failover-restore/20260906/profile-irisx/auth.json.bak-20260907",
+    "/home/box/irisx-failover-restore/20260906/profile-irisx/hooks/video_takeaway_cascade.py.bak-20260907-070750"
+  ],
+  "files": {
+    "profile-irisx/hooks/video-url-prefetch.sh": "95801545796cec13776739c9b8afc6816a3315f0210affb25723860eeedfa3ab",
+    "gate-e/bin/irisx_guard.py": "eb0a11c905cc5d9fbdcf65b71bb2ef462e97bd350b73c1d024cbbea16f3ad5c8",
+    "profile-irisx/hooks/render_takeaway.py": "dbe42194118a103cc13c950b65b30a1242958d692e5e761f88ab0ec146ab9dfc",
+    "gate-e/standby/run-watch.sh": "bfcf59c62638756c74c8ac93046b233856a9b2e2cfad16787b30caff5570f9ce",
+    "profile-irisx/hooks/video_takeaway_cascade.py": "f2fee4619a1090b6c01a825382d6bbe950cfebd8556ee3d704abb78562cde61f",
+    "profile-irisx/hooks/enrich_cached_video.py": "1a98f59b38b3a6cc9c4869184939f5beec99100e123561ec211deb2b83f29deb"
+  },
+  "config": {
+    "provider": "openai-codex",
+    "api_mode": "codex_responses",
+    "model": "gpt-5.3-codex-spark",
+    "fallback": {
+      "provider": "openai-codex",
+      "model": "gpt-5.6-luna"
+    }
+  }
+}

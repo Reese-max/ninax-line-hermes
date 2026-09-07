@@ -1,0 +1,496 @@
+{
+  "time": "2026-09-07T13:02:30.386049+00:00",
+  "status": "IMPLEMENTED_AND_DEPLOYED_PHONE_PENDING",
+  "implementation_sha256": "f652d14b85ec873b3722a2e35a85c54515ca0898499fb32e5c083fb99c28cab2",
+  "files": {
+    "hermes/gateway/run_turn_runner.py": "2887ac8d3e6d4afd4366e53a8142b392f3e7e0dbd43c747bf4856beffc147b1d",
+    "profile/hooks/video_evidence.py": "18c52d382d29637bd908dff2fd91bd172f12323facd4bc4d14ab53cdec60c546",
+    "profile/hooks/enrich_cached_video.py": "d21692b3c007f39f62cb03c96411275777180fb271c15bbdc57a49789ad5c9e5",
+    "profile/hooks/video_takeaway_cascade.py": "36539b4be8b4f5dd931917551499efee9383cfa645d3a82ff52a776633e8172e",
+    "profile/hooks/video_recovery.py": "e79d91da13f4b1db601c4d4242354765f96bae3768d28f919b1b05224d859129",
+    "profile/hooks/video_review.py": "1234beca7604b5a520b0e2d5ca88c92613b2b16db17f9d42a0483d31904e55dc",
+    "profile/hooks/video_workflow.py": "6b9c2f278b3090cf82f807c328367b8814de3660e7965e039eeff1b7e7212b6c",
+    "profile/plugins/line-platform/plugin.yaml": "ddc6706d8504d391a108f66cb51081c392f53dfa9acbc939d2e35840803d61b7",
+    "profile/plugins/line-platform/__init__.py": "1a8f418bc076736782d806bf55858dd64ced80f145ecc1d6d20515c65d2af518",
+    "profile/plugins/line-platform/README.md": "a1b6c80e0ac72fd35e394b30dcf43fa1fe9a207273d0ddf9df00dc798d08647a",
+    "profile/skills/media/video-timeline-pipeline/SKILL.md": "be236165415f5cf10ae5a78c3933bc476d988b7ecab58f63b61cc871fa67f6f6"
+  },
+  "cases": {
+    "short": {
+      "status": "PASS",
+      "case": "short",
+      "home": "/tmp/ninax-line-short-1242554",
+      "implementation_sha256": "f652d14b85ec873b3722a2e35a85c54515ca0898499fb32e5c083fb99c28cab2",
+      "test_sha256": "4c35a54f32357bf195d1fc567c356b868795d89160169e7dd9e35f1f6a1f4bb5",
+      "elapsed_seconds": 110.6,
+      "webhook_http": 200,
+      "persistence_roles": [
+        "session_meta",
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+        "user",
+        "assistant"
+      ],
+      "exit_code": 0,
+      "final_deliveries": 3,
+      "changes_after_test": [],
+      "turns": [
+        {
+          "turn_id": "b3e27d7ad73f4acebcbbcf42d208cb3aad64be0ead900bbfcd399785c26522ae",
+          "audit": "pass",
+          "elapsed_seconds": 36.43,
+          "evidence_status": "ready",
+          "duration": 14.718594,
+          "audio_ranges": [
+            [
+              0,
+              14.718594
+            ]
+          ],
+          "visual_samples": [
+            0.0,
+            0.46,
+            1.38,
+            1.84,
+            2.76,
+            3.22,
+            4.6,
+            5.519,
+            6.439,
+            6.899,
+            7.819,
+            8.279,
+            9.199,
+            10.579,
+            11.499,
+            14.468594
+          ],
+          "recovery": {
+            "status": "cache_sufficient",
+            "new_evidence": false,
+            "requested_refresh": false,
+            "attempts": []
+          },
+          "review_calls": [
+            {
+              "stage": "checklist",
+              "status": "completed",
+              "seconds": 18.19,
+              "method": null
+            },
+            {
+              "stage": "summary",
+              "status": "completed",
+              "seconds": 0,
+              "method": "source_checklist_render"
+            },
+            {
+              "stage": "audit",
+              "status": "completed",
+              "seconds": 18.05,
+              "method": null
+            }
+          ]
+        },
+        {
+          "turn_id": "97fca4c3a4188317bb5f7f7428919a94de18d5eaec4f361d41f42eebaec901ac",
+          "audit": "pass",
+          "elapsed_seconds": 0.18,
+          "evidence_status": "ready",
+          "duration": 14.718594,
+          "audio_ranges": [
+            [
+              0,
+              14.718594
+            ]
+          ],
+          "visual_samples": [
+            0.0,
+            0.46,
+            1.38,
+            1.84,
+            2.76,
+            3.22,
+            4.6,
+            5.519,
+            6.439,
+            6.899,
+            7.819,
+            8.279,
+            9.199,
+            10.579,
+            11.499,
+            14.468594
+          ],
+          "recovery": {
+            "status": "cache_sufficient",
+            "new_evidence": false,
+            "requested_refresh": false,
+            "attempts": []
+          },
+          "review_calls": []
+        },
+        {
+          "turn_id": "de2584f113d28215d335dfe8a4bf14f7579135adc2d2b000ef83f03ad70e129c",
+          "audit": "pass",
+          "elapsed_seconds": 66.0,
+          "evidence_status": "ready",
+          "duration": 14.718594,
+          "audio_ranges": [
+            [
+              0,
+              14.718594
+            ]
+          ],
+          "visual_samples": [
+            0.0,
+            0.46,
+            0.75,
+            1.38,
+            1.5,
+            1.84,
+            2.25,
+            2.76,
+            3.0,
+            3.22,
+            3.5,
+            4.6,
+            4.75,
+            5.25,
+            5.519,
+            5.75,
+            6.25,
+            6.439,
+            6.5,
+            6.899,
+            7.0,
+            7.5,
+            7.819,
+            8.0,
+            8.279,
+            9.199,
+            9.25,
+            10.25,
+            10.579,
+            11.25,
+            11.499,
+            14.468594
+          ],
+          "recovery": {
+            "status": "completed",
+            "new_evidence": true,
+            "requested_refresh": true,
+            "attempts": [
+              {
+                "stage": "media_analysis",
+                "status": "completed",
+                "seconds": 33.31
+              }
+            ]
+          },
+          "review_calls": [
+            {
+              "stage": "checklist",
+              "status": "completed",
+              "seconds": 15.43,
+              "method": null
+            },
+            {
+              "stage": "summary",
+              "status": "completed",
+              "seconds": 0,
+              "method": "source_checklist_render"
+            },
+            {
+              "stage": "audit",
+              "status": "completed",
+              "seconds": 17.06,
+              "method": null
+            }
+          ]
+        }
+      ]
+    },
+    "long": {
+      "status": "PASS",
+      "case": "long",
+      "home": "/tmp/ninax-line-long-1241466",
+      "implementation_sha256": "a6ddbdea485c8f60952c66c4cc3d1126aa24aef3953b2c36fd998cc3a264b571",
+      "test_sha256": "319c828f29900c4d6f042fe09584500feba0314bb9ccb405ee1809d322ddad8c",
+      "elapsed_seconds": 132.3,
+      "webhook_http": 200,
+      "persistence_roles": [
+        "session_meta",
+        "user",
+        "assistant"
+      ],
+      "exit_code": 0,
+      "final_deliveries": 1,
+      "changes_after_test": [
+        "profile/hooks/enrich_cached_video.py"
+      ],
+      "turns": [
+        {
+          "turn_id": "d19722ec2ceeb6437f25569885d9f0fac51713e8f6d7531a192877b77f9fcaa8",
+          "audit": "pass",
+          "elapsed_seconds": 125.72,
+          "evidence_status": "ready",
+          "duration": 78.22517,
+          "audio_ranges": [
+            [
+              0,
+              78.22517
+            ]
+          ],
+          "visual_samples": [
+            0.0,
+            14.667,
+            24.445,
+            34.224,
+            44.002,
+            53.78,
+            63.558,
+            77.97517
+          ],
+          "recovery": {
+            "status": "cache_sufficient",
+            "new_evidence": false,
+            "requested_refresh": false,
+            "attempts": []
+          },
+          "review_calls": [
+            {
+              "stage": "checklist",
+              "status": "completed",
+              "seconds": 29.07,
+              "method": null
+            },
+            {
+              "stage": "summary",
+              "status": "completed",
+              "seconds": 0,
+              "method": "source_checklist_render"
+            },
+            {
+              "stage": "audit",
+              "status": "completed",
+              "seconds": 52.32,
+              "method": null
+            },
+            {
+              "stage": "revision",
+              "status": "completed",
+              "seconds": 17.11,
+              "method": null
+            },
+            {
+              "stage": "audit",
+              "status": "completed",
+              "seconds": 26.95,
+              "method": null
+            }
+          ]
+        }
+      ]
+    },
+    "normal": {
+      "status": "PASS",
+      "case": "normal",
+      "home": "/tmp/ninax-line-normal-1221542",
+      "implementation_sha256": null,
+      "test_sha256": null,
+      "elapsed_seconds": 21.1,
+      "webhook_http": 200,
+      "persistence_roles": [
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+        "tool",
+        "assistant",
+        "tool",
+        "assistant",
+        "session_meta"
+      ],
+      "exit_code": 0,
+      "final_deliveries": 3,
+      "changes_after_test": "earlier ordinary-chat test; native adapter/core unchanged"
+    }
+  },
+  "phone_acceptance": "pending",
+  "real_line_message_sent": false,
+  "check_video.py": {
+    "gate": "video-evidence-and-budget",
+    "status": "PASS",
+    "checks": [
+      "caption_is_not_complete",
+      "platform_and_case_identity",
+      "ready_cache_no_calls",
+      "timestamp_validation",
+      "parallel_turn_ledgers",
+      "audit_missing_claims",
+      "source_alignment",
+      "expired_url_replaced",
+      "changed_media_invalidates_proof",
+      "same_url_fetch_deduplicated",
+      "resume_accepted_task_without_post",
+      "nested_child_cleanup"
+    ],
+    "exit_code": 0,
+    "test_sha256": "9dded3bc76aa78bb6218181463f3fe7b136753fc59881a07d110380c6685e39f"
+  },
+  "check_delivery.py": {
+    "gate": "line-delivery-boundaries",
+    "status": "PASS",
+    "real_line_message_sent": false,
+    "checks": [
+      "no_preview",
+      "correct_chat_and_turn",
+      "owned_reply_token",
+      "durable_no_duplicate",
+      "no_retry_on_ambiguous_acceptance",
+      "postback_cannot_bypass",
+      "control_ack_preserved"
+    ],
+    "exit_code": 0,
+    "test_sha256": "00bd263b407b2f95deb7125afa4ebbb741cb65bb4d5700b64e2868b48906c5b4"
+  },
+  "semantic_audit": {
+    "exit_code": 0,
+    "cases": [
+      {
+        "case": "complete",
+        "expected_pass": true,
+        "actual_pass": true
+      },
+      {
+        "case": "omitted_ending",
+        "expected_pass": false,
+        "actual_pass": false
+      },
+      {
+        "case": "changed_numbers",
+        "expected_pass": false,
+        "actual_pass": false
+      },
+      {
+        "case": "reversed_condition",
+        "expected_pass": false,
+        "actual_pass": false
+      },
+      {
+        "case": "checklist_misses_ending",
+        "expected_pass": false,
+        "actual_pass": false
+      },
+      {
+        "case": "wrong_time",
+        "expected_pass": false,
+        "actual_pass": false
+      }
+    ]
+  },
+  "native_tests": {
+    "command": [
+      "bash",
+      "scripts/run_tests.sh",
+      "-j",
+      "2",
+      "tests/gateway/test_line_plugin.py",
+      "tests/gateway/test_stream_final_contract.py",
+      "tests/gateway/test_stream_final_adoption_gate.py",
+      "/home/box/irisx-failover-restore/20260906/repair-20260907/video-loop/test_custom_turn.py",
+      "-q"
+    ],
+    "exit_code": 0,
+    "tested_modified_core": true,
+    "result_lines": [
+      "Discovered 4 test files (~46 tests) under ['tests/gateway/test_line_plugin.py', 'tests/gateway/test_stream_final_contract.py', 'tests/gateway/test_stream_final_adoption_gate.py', '/home/box/irisx-failover-restore/20260906/repair-20260907/video-loop/test_custom_turn.py']; running with -j 2",
+      "[ 13.0% |     6/~46 | ✓6 | ✗0] ✓ tests/gateway/test_stream_final_adoption_gate.py (6✓, 1.0s)",
+      "[ 80.4% |    37/~46 | ✓37 | ✗ 0] ✓ tests/gateway/test_line_plugin.py (31✓, 1.2s)",
+      "[100.0% |    46/~46 | ✓46 | ✗ 0] ✓ tests/gateway/test_stream_final_contract.py (8✓, 1.2s)",
+      "=== Summary: 4 files, 46 tests passed, 0 failed (100% complete) in 2.1s (2 workers) ==="
+    ]
+  },
+  "search": {
+    "backend": "anysearch",
+    "ok": true,
+    "candidates": [
+      {
+        "title": "It can happen #china #chinesehistory #chinatravel ... - Instagram",
+        "url": "https://www.instagram.com/reel/DZrNsyXivVc/"
+      }
+    ]
+  },
+  "provider_availability": {
+    "brightdata": {
+      "error": "HTTPError",
+      "http": 403,
+      "token_present": true
+    },
+    "apify": {
+      "error": "HTTPError",
+      "http": 401,
+      "token_present": false
+    }
+  },
+  "audio_recovery": {
+    "exit_code": 0,
+    "seconds": 12.0,
+    "quality_gaps": [],
+    "recovery": {
+      "provider": "groq",
+      "model": "whisper-large-v3",
+      "ranges": [
+        [
+          0,
+          37.42
+        ]
+      ],
+      "receipt": "/home/box/irisx-failover-restore/20260906/repair-20260907/video-loop/test-jobs/apify-DY66ObpOlbY/audio-recovery-58cb29054f3452be/result.json"
+    },
+    "segments": 25
+  },
+  "production": {
+    "status": "PASS",
+    "checks": {
+      "/health": 200,
+      "/line/webhook/health": 200,
+      "signed_empty_webhook": 200,
+      "bot_info": 200,
+      "official_webhook": 200
+    },
+    "old_pid": 1227872,
+    "pid": 1227872,
+    "start_time": 33084424,
+    "bot_name": "NINAX",
+    "guard_pid": 1123259,
+    "lease": {
+      "active": true,
+      "holder": "standby-cursor-grokbot",
+      "generation": 8,
+      "expires_at": 1788786139.044
+    },
+    "gateway_state": "running",
+    "line_state": "connected",
+    "real_line_message_sent": false,
+    "phone_acceptance": "pending",
+    "time": 1788786082.9337282
+  },
+  "git": {
+    "head": "13e72fb205b735df679e0fd5f5996a34ac4accc6",
+    "status": [
+      " M gateway/run_turn_runner.py",
+      "?? gateway/run_turn_runner.py.bak-20260907"
+    ]
+  },
+  "production_video_turn_files": 0,
+  "limitations": [
+    "Real phone delivery/content acceptance pending",
+    "No live metered fetch started; Bright Data balance permission denied, Apify token absent",
+    "Cross-platform longer-original match verified with fixtures, not a real longer-original acceptance",
+    "Automatic speech and sampled vision can still be wrong; source context above 65000 characters blocks instead of truncating"
+  ]
+}
