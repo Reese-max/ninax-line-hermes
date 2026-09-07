@@ -28,6 +28,7 @@
 !/video-loop/LOOP.md
 !/video-loop/GOAL.md
 !/video-loop/check_goal.py
+!/video-loop/check_ci.py
 !/video-loop/check_extended.py
 !/video-loop/video-settings.example.json
 !/video-loop/runtime-lock.json
