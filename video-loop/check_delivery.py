@@ -10,7 +10,7 @@ import tempfile
 import time
 
 BASE=Path(__file__).parent
-HERMES='/home/box/.hermes/hermes-agent'
+HERMES=sys.argv[1] if len(sys.argv)>1 else '/home/box/.hermes/hermes-agent'
 
 
 async def check():
@@ -25,6 +25,10 @@ async def check():
         spec.loader.exec_module(plugin)
         from gateway.config import PlatformConfig
         adapter=plugin.VideoLineAdapter(PlatformConfig(enabled=True))
+        assert adapter._video_request('繼續摘要','pending-long')['url'] is None
+        plugin.atomic_json(adapter._session_path('pending-long'),{'url':'https://www.youtube.com/watch?v=LongFixture',
+                           'review_question':'整理操作順序與片尾','last_was_video':True})
+        assert adapter._video_request('繼續摘要','pending-long')['review_question']=='整理操作順序與片尾'
         class Client:
             def __init__(self):self.calls=[];self.ambiguous=False
             async def reply(self,token,messages):

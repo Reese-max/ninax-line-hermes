@@ -9,7 +9,7 @@ import time
 from urllib.parse import urlsplit
 
 import video_evidence as evidence
-from video_evidence import atomic_json, digest, identity, job_lock, matches, read_json, run, snapshot
+from video_evidence import PIPELINE_COMMAND, atomic_json, digest, identity, job_lock, matches, read_json, run, snapshot
 from video_recovery import recover_original, search
 
 ROOT = Path(__file__).parent
@@ -56,7 +56,9 @@ def enrich(job, deadline, ledger, max_frames=0):
 
 def content_revision(doc):
     # File rewrites invalidate an approval, but are not newly acquired content.
-    return digest({k:doc[k] for k in ('source','media_sha256','duration','items','gaps','processed_ranges','related_sources')})
+    content={k:doc[k] for k in ('source','media_sha256','duration','items','gaps','processed_ranges','related_sources')}
+    content['processed_ranges']={k:v for k,v in doc['processed_ranges'].items() if k!='semantic_recovery'}
+    return digest(content)
 
 
 def expand_visuals(job, doc, deadline, ledger):
@@ -105,7 +107,7 @@ def cascade(url, *, seconds=210, force=False):
     job = find_job(url)
     if not job:
         first_deadline = min(deadline, time.monotonic()+70)
-        stage('initial_local_fetch', ['/workspace/bin/video-pipeline', '--url', url, '--local-only',
+        stage('initial_local_fetch', [PIPELINE_COMMAND, '--url', url, '--local-only',
               '--root', str(JOBS.parent), '--workers', '1'], first_deadline, ledger, 70)
         job = find_job(url) or placeholder(url)
     doc = snapshot(job, url)
@@ -130,7 +132,7 @@ def cascade(url, *, seconds=210, force=False):
             recovery_deadline = min(deadline-80, time.monotonic()+40)
             if recovery_deadline > time.monotonic():
                 candidates = search(doc, recovery_deadline, ledger)
-            recover_original(doc,candidates,job,min(deadline-70,time.monotonic()+30),ledger)
+            recover_original(doc,candidates,job,min(deadline-70,time.monotonic()+90),ledger)
             stage('refresh_original_metadata', [sys.executable, str(ROOT/'video_recovery.py'), '--refresh',
                   url, '--job', str(job), '--seconds', '20'], min(deadline-70, time.monotonic()+22), ledger, 22)
             # No candidate becomes source evidence merely because its title sounds related.
@@ -167,6 +169,38 @@ def package(job, doc):
             'url': (doc.get('source') or {}).get('url'), 'evidence': doc,
             'draft': json.dumps({k:v for k,v in doc.items() if k != 'turns'}, ensure_ascii=False),
             'note': doc['evidence_status']}
+
+
+def repair_requested(job, doc, requests, deadline, ledger):
+    entry={'stage':'review_requested_recovery','status':'started','targets':requests}
+    ledger.append(entry)
+    started=time.monotonic()
+    before=content_revision(doc)
+    try:
+        if any(r['kind']=='original' for r in requests):
+            attempts=doc.get('recovery',{}).get('attempts',[])+ledger
+            queries=max(0,3-sum(a['stage']=='search' for a in attempts))
+            slots=max(0,3-sum(a['stage']=='verify_original_source' for a in attempts))
+            candidates=search(doc,min(deadline-20,time.monotonic()+25),ledger,queries) if queries else doc.get('candidate_sources',[])
+            recover_original(doc,candidates[:slots],job,deadline,ledger)
+        targets=[r for r in requests if r['kind']!='original']
+        output=run([sys.executable,str(ROOT/'enrich_cached_video.py'),str(job),'--targets',
+                    '--jobs-root',str(JOBS),'--seconds',str(max(1,deadline-time.monotonic()))],
+                   deadline,timeout=60,input=json.dumps(targets)) if targets else None
+        result=json.loads(output.stdout) if output and output.returncode==0 else {}
+        entry.update(status='completed' if result.get('ok') else 'unchanged',result=result)
+    except Exception as exc:
+        entry.update(status='failed',reason=type(exc).__name__)
+    finally:
+        entry['seconds']=round(time.monotonic()-started,2)
+    refreshed=snapshot(job,doc['source']['url'])
+    entry['new_evidence']=before!=content_revision(refreshed)
+    if entry['new_evidence']:
+        entry['status']='completed'
+    refreshed['recovery']={**doc.get('recovery',{}),'semantic_recovery':entry,
+                           'new_evidence':before!=content_revision(refreshed)}
+    package(job,refreshed)
+    return refreshed
 
 
 if __name__ == '__main__':

@@ -1,0 +1,67 @@
+name: NINAX checks
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+env:
+  PYTHONUTF8: '1'
+jobs:
+  offline:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+      - name: Source syntax
+        run: python -m compileall -q video-loop/work/profile video-loop/install.py
+      - name: Bounded recovery, source binding and long-video acceptance
+        run: python -B video-loop/check_goal.py
+      - name: Interrupted upgrade and rollback
+        run: python -B video-loop/check_install.py
+      - name: Whitespace
+        run: git diff --check
+  pipeline-windows:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+      - name: Native Windows pipeline self-check
+        run: python -B video-loop/vendor/video-pipeline/pipeline.py --self-test
+  hermes-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+      - name: Restore pinned Hermes source and dependencies
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os, pathlib, subprocess
+          lock=json.loads(pathlib.Path('video-loop/runtime-lock.json').read_text())
+          root=pathlib.Path(os.environ['RUNNER_TEMP'])/'ninax-hermes'
+          for cmd in (['git','init',str(root)],['git','-C',str(root),'remote','add','origin',lock['hermes']['repository']],
+                      ['git','-C',str(root),'fetch','--depth','1','origin',lock['hermes']['commit']],
+                      ['git','-C',str(root),'checkout','--detach','FETCH_HEAD']):
+              subprocess.run(cmd,check=True)
+          requirements=root/'ninax-requirements.txt'
+          requirements.write_text('\n'.join(k+'=='+v for k,v in lock['environments']['hermes']['packages'].items() if k!='hermes-agent')+'\npytest==9.1.1\npytest-asyncio==1.3.0\n')
+          subprocess.run(['python','-m','pip','install','-r',str(requirements)],check=True)
+          subprocess.run(['python','-m','pip','install','--no-deps','-e',str(root)],check=True)
+          (root/'gateway/run_turn_runner.py').write_bytes(pathlib.Path('video-loop/work/hermes/gateway/run_turn_runner.py').read_bytes())
+          PY
+      - name: Source and delivery guards against native Hermes
+        shell: bash
+        run: |
+          python -B video-loop/check_video.py "$RUNNER_TEMP/ninax-hermes"
+          python -B video-loop/check_delivery.py "$RUNNER_TEMP/ninax-hermes"
+          cd "$RUNNER_TEMP/ninax-hermes"
+          HERMES_PYTHON="$(command -v python)" bash scripts/run_tests.sh -j 2 tests/gateway/test_line_plugin.py tests/gateway/test_stream_final_contract.py tests/gateway/test_stream_final_adoption_gate.py "$GITHUB_WORKSPACE/video-loop/test_custom_turn.py" -q

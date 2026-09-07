@@ -13,8 +13,8 @@ import tempfile
 import time
 from urllib.parse import parse_qs, urlsplit, urlunsplit
 
-JOBS = Path('/workspace/video-timeline-pipeline/jobs')
 POLICY = 'ninax-video-2.2'
+AUDIO_POLICY = 'ninax-audio-3.0'
 HOSTS = {'instagram.com': 'instagram', 'facebook.com': 'facebook', 'fb.watch': 'facebook',
          'youtube.com': 'youtube', 'youtu.be': 'youtube', 'tiktok.com': 'tiktok',
          'x.com': 'x', 'twitter.com': 'x', 'threads.net': 'threads',
@@ -38,6 +38,15 @@ def read_json(path, default=None):
         return json.loads(Path(path).read_text())
     except (OSError, ValueError):
         return {} if default is None else default
+
+
+# Profile-local paths keep copies and isolated acceptance runs independent.
+SETTINGS = read_json(Path(__file__).resolve().parent.parent/'video-settings.json')
+HERMES = Path(SETTINGS.get('hermes_root', '/home/box/.hermes/hermes-agent'))
+PIPELINE = Path(SETTINGS.get('pipeline_root', '/workspace/video-timeline-pipeline'))
+PIPELINE_COMMAND = SETTINGS.get('pipeline_command', '/workspace/bin/video-pipeline')
+STT_PYTHON = SETTINGS.get('stt_python', '/home/box/irisx-failover-restore/20260906/gate-c/venv/bin/python')
+JOBS = Path(SETTINGS.get('jobs_root', str(PIPELINE/'jobs')))
 
 
 def atomic_json(path, value):
@@ -149,7 +158,7 @@ def valid_job(job):
 def artifact_stamps(job):
     result = {}
     for name in ('source.info.json','apify.item.json','brightdata.item.json','transcript.json',
-                 'visual.json','media-proof.json','cached-media.mp4','external-evidence.json'):
+                 'visual.json','media-proof.json','cached-media.mp4','external-evidence.json','targeted-recovery.json'):
         path = Path(job)/name
         if path.is_file():
             stat = path.stat()
@@ -165,6 +174,30 @@ def evidence_revision(doc):
     keys = ('schema_version','policy','source','author','duration','media_sha256','evidence_status',
             'gaps','items','processed_ranges','limitations','artifact_stamps','related_sources','source_aliases')
     return digest({k:doc[k] for k in keys})
+
+
+def stable_items(job, items):
+    """Adding or repairing a segment must not renumber unrelated, already audited evidence."""
+    path=job/'evidence-ids.json'
+    with job_lock(job,time.monotonic()+5,'evidence-ids.lock'):
+        ids=read_json(path)
+        if not ids:
+            for item in read_json(job/'evidence.json').get('items',[]):
+                if re.fullmatch(r'E[1-9][0-9]*',item.get('id','')):
+                    ids[digest({k:v for k,v in item.items() if k!='id'})]=int(item['id'][1:])
+        if any(not isinstance(value,int) or value<1 for value in ids.values()) or len(set(ids.values()))!=len(ids):
+            raise ValueError('invalid_evidence_id_registry')
+        next_id=max(ids.values(),default=0)+1
+        before=len(ids)
+        unique={}
+        for item in items:
+            key=digest({k:v for k,v in item.items() if k!='id'})
+            if key not in ids:
+                ids[key]=next_id;next_id+=1
+            unique[key]={**item,'id':f'E{ids[key]}'}
+        if not path.exists() or len(ids)!=before:
+            atomic_json(path,ids)
+    return list(unique.values())
 
 
 def snapshot(job, url):
@@ -221,7 +254,7 @@ def snapshot(job, url):
             timestamp_errors.append('invalid_visual_timestamp')
     media_hash = media.get('sha256')
     audio_complete = bool(media_hash and speech.get('media_sha256') == media_hash
-                          and speech.get('analysis_policy') == POLICY
+                          and speech.get('analysis_policy') == AUDIO_POLICY
                           and speech.get('processed_ranges') == [[0, media.get('audio_duration',duration)]]
                           and speech.get('status') in {'transcribed', 'no_speech_detected', 'no_audio_track'})
     if not matches(job, url):
@@ -251,7 +284,9 @@ def snapshot(job, url):
     external = read_json(job/'external-evidence.json')
     target = external.get('target') or {}
     wanted = identity(url) or {}
-    if (external.get('verification',{}).get('method')=='creator-and-unique-timed-speech'
+    if (external.get('verification',{}).get('method') in {'creator-and-unique-timed-speech','unique-timed-visual-sequence'}
+            and (external.get('source_media_sha256')==media_hash if external.get('verification',{}).get('method')=='unique-timed-visual-sequence'
+                 else external.get('source_media_sha256',media_hash)==media_hash)
             and all(target.get(k)==wanted.get(k) for k in ('platform','id')) and identity(external.get('url',''))):
         related_sources.append({k:external[k] for k in ('url','author','relation','duration','verification')})
         for segment in external.get('segments',[]):
@@ -265,6 +300,7 @@ def snapshot(job, url):
                                   'source_relation':external['relation'],'source_duration':external['duration']})
             except (KeyError,TypeError,ValueError):
                 gaps.append('invalid_external_timestamp')
+    items=stable_items(job,items)
     content = [x for x in items if x['kind'] != 'caption']
     status = 'ready' if not gaps else ('partial' if content else 'insufficient')
     evidence = {'schema_version': 1, 'policy': POLICY, 'source': identity(url),
@@ -273,9 +309,13 @@ def snapshot(job, url):
                 'duration': duration, 'media_sha256': media_hash, 'evidence_status': status,
                 'gaps': gaps, 'items': items, 'processed_ranges': {'audio': speech.get('processed_ranges', []),
                 'visual_samples': sorted(set(frame_times)), 'audio_recovery':speech.get('recovery'),
+                'semantic_recovery':[r for r in read_json(job/'targeted-recovery.json').values()
+                                     if r.get('analysis_policy')==(AUDIO_POLICY if r.get('kind')=='speech' else POLICY)],
                 'speech_quality_gaps':speech.get('quality_gaps',[])},
                 'related_sources':related_sources,
                 'limitations': ['畫面為取樣觀察；未逐幀確認。', '自動語音辨識與畫面判讀可能有誤差。']}
+    if any(s['relation']=='matching_visual_version' for s in related_sources):
+        evidence['limitations'].append('補查版本只有畫面順序相符，作者身分未確認；相符片段外的字幕只屬補查影片，不能當成原片內容。')
     evidence['artifact_stamps'] = artifact_stamps(job)
     evidence['evidence_revision'] = evidence_revision(evidence)
     return evidence

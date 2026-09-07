@@ -11,7 +11,7 @@ from unittest.mock import MagicMock,patch
 
 BASE = Path(__file__).parent
 sys.path.insert(0, str(BASE/'work/profile/hooks'))
-sys.path.insert(0, '/home/box/.hermes/hermes-agent')
+sys.path.insert(0, sys.argv[1] if len(sys.argv)>1 else '/home/box/.hermes/hermes-agent')
 import video_evidence as ev
 import video_takeaway_cascade as cascade
 import video_review as review
@@ -42,7 +42,7 @@ def check():
                        'visual':{'policy':ev.POLICY,'sha256':'abc','complete':True,'decoded_until':78}})
         ev.atomic_json(job/'transcript.json', {'text':'第一步不是先開啟，需等候 30 秒。',
              'segments':[{'start':0,'end':10,'text':'第一步不是先開啟，需等候 30 秒。'}],
-             'status':'transcribed','media_sha256':'abc','processed_ranges':[[0,78]],'analysis_policy':ev.POLICY,
+             'status':'transcribed','media_sha256':'abc','processed_ranges':[[0,78]],'analysis_policy':ev.AUDIO_POLICY,
              'quality_checked':True})
         ev.atomic_json(job/'visual.json', [{'timestamp':3,'visual_summary':'畫面顯示第二步',
                                           'visible_text':['上限 20%']}])

@@ -14,12 +14,13 @@ from gateway.platforms.base import BasePlatformAdapter, SendResult
 
 _HOOKS = Path(get_hermes_home())/'hooks'
 sys.path.insert(0, str(_HOOKS))
-from video_evidence import artifact_stamps, atomic_json, digest, evidence_revision, identity, read_json, run
+from video_evidence import HERMES, JOBS, artifact_stamps, atomic_json, digest, evidence_revision, identity, read_json, run
 from video_review import MISSING_SOURCE_NOTICE, NOTICE, status_notice
 
 _TURN = contextvars.ContextVar('ninax_video_delivery', default=None)
 URL_RE = re.compile(r'https://[^\s<>"\']+')
 RECALL = re.compile(r'再(?:說|講)一次|重複.{0,4}(?:摘要|重點)')
+CONTINUE = re.compile(r'繼續摘要|繼續核對')
 RECOVER = re.compile(r'完整一點|補查|再查一次|重新查|補充.{0,6}(?:影片|內容|重點)')
 FOLLOW = re.compile(r'(?:這支|那支|這部|那部|剛才的|上一支).{0,6}(?:影片|內容|重點)|影片.{0,6}(?:摘要|重點|說什麼|在講)')
 
@@ -37,7 +38,7 @@ class VideoLineAdapter(native.LineAdapter):
         self._video_home = Path(get_hermes_home()).resolve()
         self._video_state = self._video_home/'video-turns'
         self._video_state.mkdir(mode=0o700, parents=True, exist_ok=True)
-        self._video_jobs = (getattr(config,'extra',{}) or {}).get('video_jobs_root', '/workspace/video-timeline-pipeline/jobs')
+        self._video_jobs = (getattr(config,'extra',{}) or {}).get('video_jobs_root', str(JOBS))
         self._active_videos = {}
         self._reviewed_cache = {}
 
@@ -49,14 +50,15 @@ class VideoLineAdapter(native.LineAdapter):
         urls = [u for u in urls if u]
         if urls:
             return {'url':urls[0]['url'], 'force':bool(RECOVER.search(message)), 'recall':{}}
-        if not (RECALL.search(message or '') or RECOVER.search(message or '') or FOLLOW.search(message or '')):
+        if not (RECALL.search(message or '') or CONTINUE.search(message or '') or RECOVER.search(message or '') or FOLLOW.search(message or '')):
             return None
         saved = read_json(self._session_path(session_key))
         if not identity(saved.get('url') or ''):
-            return {'url':None,'force':True,'recall':{}} if (RECOVER.search(message) or FOLLOW.search(message)) else None
+            return {'url':None,'force':True,'recall':{}} if (RECOVER.search(message) or CONTINUE.search(message) or FOLLOW.search(message)) else None
         if RECALL.search(message) and saved.get('last_was_video') is False and not FOLLOW.search(message):
             return None
         return {'url':saved['url'], 'force':bool(RECOVER.search(message)),
+                'review_question':saved.get('review_question') if (CONTINUE.fullmatch(message.strip(' 。！!')) or RECALL.fullmatch(message.strip(' 。！!'))) else None,
                 'recall':saved.get('result',{}) if RECALL.fullmatch(message.strip(' 。！!')) else {}}
 
     async def _process_message_background(self, event, session_key):
@@ -110,7 +112,7 @@ class VideoLineAdapter(native.LineAdapter):
             if not request['url']:
                 raise LookupError('video_source_missing')
             result = run([sys.executable, str(self._video_home/'hooks/video_workflow.py')], time.monotonic()+290,
-                         input=json.dumps(request,ensure_ascii=False), cwd='/home/box/.hermes/hermes-agent',
+                         input=json.dumps(request,ensure_ascii=False), cwd=str(HERMES),
                          is_current=lambda: not handle.is_interrupted and ctx._run_still_current())
             doc = json.loads(result.stdout) if result.returncode == 0 else {}
             if not doc.get('approval'):
@@ -123,7 +125,8 @@ class VideoLineAdapter(native.LineAdapter):
                    'approval':{'binding':state['binding'], 'kind':'notice',
                                'payload_sha256':digest(native._text_messages(notice)), 'approved_at':time.time()}}
         state.update(approval=doc['approval'], result=doc)
-        atomic_json(self._session_path(ctx.session_key), {'url':request['url'], 'result':doc,'last_was_video':True})
+        atomic_json(self._session_path(ctx.session_key), {'url':request['url'], 'result':doc,'last_was_video':True,
+                    'review_question':request.get('review_question') or request['question']})
         return self._result(ctx, doc['text'])
 
     @staticmethod
@@ -185,7 +188,7 @@ class VideoLineAdapter(native.LineAdapter):
         if approval.get('kind') == 'notice':
             result = state.get('result') or {}
             return any(messages==native._text_messages(text) for text in
-                       (NOTICE,MISSING_SOURCE_NOTICE,status_notice(result.get('source'),result.get('gaps',[]))))
+                       (NOTICE,MISSING_SOURCE_NOTICE,status_notice(result.get('source'),result.get('gaps',[]),result.get('progress'))))
         result = state.get('result') or {}
         if result.get('audit',{}).get('status') != 'pass':
             return False

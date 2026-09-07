@@ -1,0 +1,22 @@
+#!/usr/bin/env python3
+"""Profile-local entry point; credentials are inherited or read without printing."""
+import json
+import os
+from pathlib import Path
+import sys
+
+from dotenv import dotenv_values
+
+settings=json.loads((Path(__file__).resolve().parent.parent/'video-settings.json').read_text())
+root=Path(settings['pipeline_root'])
+env=dict(os.environ)
+for path in settings.get('provider_env_files',[]):
+    env.update({k:v for k,v in dotenv_values(path).items() if v})
+env.setdefault('MINIMAX_SUBSCRIPTION_KEY',env.get('MINIMAX_API_KEY',''))
+env.setdefault('MINIMAX_BASE_URL','https://api.minimax.io/v1')
+env.setdefault('MINIMAX_MODEL','MiniMax-M3')
+env.setdefault('GROQ_ASR_MODEL','whisper-large-v3')
+env['PATH']=str(root/'.venv/bin')+os.pathsep+env.get('PATH','')
+os.chdir(root)
+python=str(root/'.venv/bin/python')
+os.execve(python,[python,str(root/'pipeline.py'),*sys.argv[1:]],env)

@@ -1,6 +1,7 @@
 """Bounded, gap-directed recovery; persist an accepted remote task before polling it."""
 import argparse
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -8,9 +9,7 @@ import sys
 import time
 from urllib.parse import urlencode
 
-from video_evidence import atomic_json, digest, identity, job_lock, read_json, run
-
-HERMES = '/home/box/.hermes/hermes-agent'
+from video_evidence import HERMES, JOBS, PIPELINE, PIPELINE_COMMAND, atomic_json, digest, identity, job_lock, read_json, run
 
 
 def resolve_video_url(url):
@@ -74,17 +73,17 @@ def search_worker(query):
         return {'backend':'anysearch','ok':True,'candidates':candidates[:3]}
     except Exception as exc:
         fallback_reason='anysearch_'+type(exc).__name__
-    sys.path.insert(0, HERMES)
+    sys.path.insert(0, str(HERMES))
     from tools.web_tools import web_search_tool, _get_search_backend
     result = json.loads(web_search_tool(query, limit=3))
     return {'backend': _get_search_backend(), 'ok': result.get('success', False),
             'candidates': result.get('data', {}).get('web', [])[:3],'fallback_reason':fallback_reason}
 
 
-def search(evidence, deadline, ledger):
+def search(evidence, deadline, ledger, limit=3):
     candidates = []
     seen = set()
-    for query in query_seeds(evidence):
+    for query in query_seeds(evidence)[:max(0,min(3,limit))]:
         if time.monotonic() >= deadline or len(candidates) >= 3:
             break
         entry = {'stage': 'search', 'query': query, 'status': 'started'}
@@ -185,10 +184,69 @@ def align_transcripts(evidence, info, transcript):
             'offset_seconds':sum(x['offset'] for x in matches)/len(matches)}
 
 
+def align_visuals(source, target, duration):
+    """Content continuity is evidence of a matching version, never proof of creator ownership."""
+    def informative(frame):
+        value=frame.get('hash','')
+        stamp=frame.get('timestamp')
+        return (isinstance(stamp,(int,float)) and math.isfinite(stamp) and stamp>=0
+                and len(value)==64 and set(value)<={'0','1'} and 12<=value.count('1')<=52)
+    anchors=[]
+    for frame in source:
+        if not informative(frame) or frame['timestamp']>duration or any(sum(a!=b for a,b in zip(frame['hash'],old['hash']))<=8 for old in anchors):
+            continue
+        scores=sorted((sum(a!=b for a,b in zip(frame['hash'],other['hash'])),other['timestamp'])
+                      for other in target if informative(other))
+        if (not scores or scores[0][0]>4 or any(distance-scores[0][0]<3 and abs(stamp-scores[0][1])>1.5
+                                              for distance,stamp in scores[1:])):
+            continue
+        anchors.append({'source_start':frame['timestamp'],'target_start':scores[0][1],
+                        'offset':scores[0][1]-frame['timestamp'],'hash':frame['hash'],'distance':scores[0][0]})
+    anchors.sort(key=lambda x:x['source_start'])
+    if (len(anchors)<4 or anchors[-1]['source_start']-anchors[0]['source_start']<max(3,duration*.5)
+            or any(a['target_start']>=b['target_start'] for a,b in zip(anchors,anchors[1:]))
+            or max(a['offset'] for a in anchors)-min(a['offset'] for a in anchors)>1.5):
+        return None
+    return {'method':'unique-timed-visual-sequence','creator_verified':False,
+            'anchors':[{k:v for k,v in a.items() if k!='hash'} for a in anchors],
+            'offset_seconds':sum(a['offset'] for a in anchors)/len(anchors)}
+
+
+def visual_match_worker(request, deadline):
+    from enrich_cached_video import probe
+    sys.path.insert(0,str(PIPELINE))
+    import pipeline
+    sequences=[]
+    durations=[]
+    for name in ('source','candidate'):
+        media=Path(request[name]).resolve()
+        root=Path(request['root']).resolve()
+        if not media.is_file() or not media.is_relative_to(root):
+            raise ValueError('unbound_visual_candidate')
+        proof=probe(media,deadline)
+        if name=='source' and proof['sha256']!=request.get('expected_source_sha256'):
+            raise ValueError('visual_source_changed')
+        durations.append(proof['duration'])
+        interval=max(.25,proof['duration']/(32 if name=='source' else 240))
+        frames=root/('match-frames-'+digest([proof['sha256'],interval])[:16])
+        frames.mkdir(exist_ok=True)
+        cache=frames/('hashes-'+str(interval)+'.json')
+        sequence=read_json(cache,[])
+        if not sequence:
+            output=run(['ffmpeg','-hide_banner','-loglevel','error','-y','-i',str(media),
+                        '-vf',f'fps=1/{interval},scale=160:-2','-frames:v','240',str(frames/'frame-%04d.jpg')],deadline,timeout=20)
+            if output.returncode:
+                raise ValueError('candidate_decode_failed')
+            sequence=[{'timestamp':(int(p.stem.split('-')[-1])-1)*interval,'hash':pipeline.average_hash(p)}
+                      for p in sorted(frames.glob('frame-*.jpg'))]
+            atomic_json(cache,sequence)
+        sequences.append(sequence)
+    return align_visuals(*sequences,durations[0])
+
+
 def recover_original(evidence, candidates, job, deadline, ledger):
-    if not evidence.get('author') or len([x for x in evidence.get('items',[]) if x['kind']=='speech'])<2:
-        return False
     from video_evidence import matches
+    visual_attempted=False
     for candidate in candidates[:3]:
         if candidate['relation']=='same_video' or time.monotonic()>=deadline-5:
             continue
@@ -196,7 +254,7 @@ def recover_original(evidence, candidates, job, deadline, ledger):
         entry = {'stage':'verify_original_source','url':candidate['url'],'status':'started'}
         ledger.append(entry)
         try:
-            result = run(['/workspace/bin/video-pipeline','--url',candidate['url'],'--no-video',
+            result = run([PIPELINE_COMMAND,'--url',candidate['url'],'--no-video',
                           '--local-only','--root',str(root),'--workers','1'],deadline,timeout=20)
             selected = next((p.parent for p in (root/'jobs').glob('*/source.info.json')
                              if matches(p.parent,candidate['url'])),None)
@@ -207,11 +265,31 @@ def recover_original(evidence, candidates, job, deadline, ledger):
             transcript = read_json(selected/'transcript.json')
             alignment = align_transcripts(evidence,info,transcript)
             duration = float(info.get('duration') or 0)
+            if not math.isfinite(duration) or duration<=0:
+                continue
+            if not alignment and not visual_attempted and evidence.get('media_sha256') and duration<=1200 and deadline-time.monotonic()>12:
+                visual_attempted=True
+                # One local-only candidate per turn; enforce the byte ceiling while its process runs.
+                result=run([PIPELINE_COMMAND,'--url',candidate['url'],'--local-only','--root',str(root),
+                            '--workers','1'],deadline,timeout=35,
+                           is_current=lambda:sum(p.stat().st_size for p in root.rglob('*') if p.is_file())<=128*1024*1024)
+                candidate_media=Path(read_json(selected/'manifest.json').get('source',{}).get('resolved_video') or '/nonexistent')
+                if not candidate_media.is_absolute():
+                    candidate_media=root/candidate_media
+                source_media=Path(read_json(job/'media-proof.json').get('file_path') or '/nonexistent')
+                if result.returncode==0 and candidate_media.is_file() and candidate_media.resolve().is_relative_to(selected.resolve()):
+                    output=run([str(PIPELINE/'.venv/bin/python'),str(Path(__file__)),'--visual-match'],deadline,timeout=35,
+                               input=json.dumps({'source':str(source_media),'candidate':str(candidate_media),'root':str(job),
+                                                 'expected_source_sha256':evidence['media_sha256']}))
+                    if output.returncode==0:
+                        alignment=json.loads(output.stdout)
             if not alignment or duration < float(evidence.get('duration') or 0):
                 entry.update(status='rejected',reason='identity_or_alignment_mismatch')
                 continue
             verified = {'target':evidence['source'],'url':candidate['url'],'author':info.get('uploader'),
-                        'relation':'longer_original' if duration>float(evidence.get('duration') or 0)+3 else 'same_content_copy',
+                        'source_media_sha256':evidence.get('media_sha256'),
+                        'relation':('matching_visual_version' if alignment['method']=='unique-timed-visual-sequence' else
+                                    'longer_original' if duration>float(evidence.get('duration') or 0)+3 else 'same_content_copy'),
                         'duration':duration,'verification':alignment,'segments':transcript.get('segments',[])}
             atomic_json(job/'external-evidence.json',verified)
             entry.update(status='verified',relation=verified['relation'],anchors=len(alignment['anchors']))
@@ -328,13 +406,16 @@ if __name__ == '__main__':
     parser.add_argument('--resolve')
     parser.add_argument('--fetch')
     parser.add_argument('--refresh')
+    parser.add_argument('--visual-match',action='store_true')
     parser.add_argument('--job')
     parser.add_argument('--state')
-    parser.add_argument('--jobs-root', default='/workspace/video-timeline-pipeline/jobs')
+    parser.add_argument('--jobs-root', default=str(JOBS))
     parser.add_argument('--seconds', type=float, default=40)
     args = parser.parse_args()
     try:
-        if args.resolve:
+        if args.visual_match:
+            result=visual_match_worker(json.load(sys.stdin),time.monotonic()+args.seconds)
+        elif args.resolve:
             result = {'url':resolve_video_url(args.resolve)}
         elif args.search:
             result = search_worker(args.search)

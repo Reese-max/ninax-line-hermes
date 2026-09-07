@@ -1,0 +1,8 @@
+{
+  "hermes_root": "/srv/ninax/hermes-agent",
+  "pipeline_root": "/srv/ninax/video-pipeline",
+  "pipeline_command": "/srv/ninax/profile/bin/video-pipeline",
+  "stt_python": "/srv/ninax/stt/bin/python",
+  "jobs_root": "/srv/ninax/video-pipeline/jobs",
+  "provider_env_files": ["/srv/ninax/profile/.env"]
+}

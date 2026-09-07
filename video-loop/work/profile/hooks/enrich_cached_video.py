@@ -16,17 +16,19 @@ import tempfile
 import time
 from urllib.parse import urlsplit, urlunsplit
 
-from video_evidence import POLICY, atomic_json, digest, job_lock, read_json, run, valid_job
+from video_evidence import (POLICY, AUDIO_POLICY, PIPELINE, PIPELINE_COMMAND, STT_PYTHON, SETTINGS,
+                            atomic_json, digest, job_lock, read_json, run, valid_job)
 import video_evidence
 
-PIPELINE = Path('/workspace/video-timeline-pipeline')
-STT_PYTHON = '/home/box/irisx-failover-restore/20260906/gate-c/venv/bin/python'
 MAX_BYTES = 128 * 1024 * 1024
 
 
 def transcribe_media(media):
     from faster_whisper import WhisperModel
-    model = WhisperModel('small', device='cpu', compute_type='int8', local_files_only=True)
+    from huggingface_hub import snapshot_download
+    model_path=snapshot_download('Systran/faster-whisper-small',revision='536b0662742c02347bc0e980a01041f333bce120',
+                                local_files_only=True,allow_patterns=['config.json','model.bin','tokenizer.json','vocabulary.txt'])
+    model = WhisperModel(model_path, device='cpu', compute_type='int8', local_files_only=True)
     segments, info = model.transcribe(str(media), vad_filter=True, temperature=0,
                                      condition_on_previous_text=False)
     kept = [{'start': s.start, 'end': s.end, 'text': s.text.strip(),
@@ -118,7 +120,8 @@ def fetch_media(url, target, deadline):
 def provider_env():
     from dotenv import dotenv_values
     env = dict(os.environ)
-    for path in ['/home/box/.opencode/.env','/home/box/.hermes/.env','/home/box/.grok/.env',str(PIPELINE/'.env')]:
+    for path in SETTINGS.get('provider_env_files', [str(Path.home()/'.opencode/.env'),
+                 str(Path.home()/'.hermes/.env'),str(Path.home()/'.grok/.env'),str(PIPELINE/'.env')]):
         env.update({k:v for k,v in dotenv_values(path).items() if v is not None})
     return env
 
@@ -146,22 +149,30 @@ def repair_audio_worker(job):
     return transcript
 
 
-def repair_speech(job,media,proof,speech,deadline):
+def repair_speech(job,media,proof,speech,deadline,target=None):
     bad = [s for s in speech.get('segments',[]) if weak_speech(s)]
     speech['quality_checked'] = True
     speech['quality_gaps'] = [[s['start'],s['end']] for s in bad]
-    if not bad:
-        return
+    if not bad and not target:
+        return False
     for segment in bad:
         segment['quality_issue'] = True
-    start = max(0,min(s['start'] for s in bad)-1)
-    end = min(proof['audio_duration'],max(s['end'] for s in bad)+1)
-    # ponytail: one bounded recovery span; split sparse spans only if real long-video cases require it.
-    if end-start>120 or deadline-time.monotonic()<10:
-        return
+    start = target['start'] if target else max(0,min(s['start'] for s in bad)-1)
+    end = target['end'] if target else min(proof['audio_duration'],max(s['end'] for s in bad)+1)
+    # Keep whole overlapping segments; replacing half a segment would silently lose its other half.
+    for _ in range(len(speech.get('segments',[]))+1):
+        overlaps = [s for s in speech.get('segments',[]) if s['end']>start and s['start']<end]
+        bounds = (max(0,min([start]+[s['start'] for s in overlaps])),
+                  min(proof['audio_duration'],max([end]+[s['end'] for s in overlaps])))
+        if bounds == (start,end):
+            break
+        start,end = bounds
+    # ponytail: at most 120 seconds per request; sparse failures are repaired in later bounded turns.
+    if not 0<=start<end<=proof['audio_duration'] or end-start>120 or deadline-time.monotonic()<10:
+        return False
     env = provider_env()
     if not env.get('GROQ_API_KEY'):
-        return
+        return False
     request = {'media':str(media),'start':start,'end':end,'model':env.get('GROQ_ASR_MODEL','whisper-large-v3')}
     recovery = job/('audio-recovery-'+digest([proof['sha256'],start,end,request['model']])[:16])
     recovery.mkdir(exist_ok=True)
@@ -179,12 +190,27 @@ def repair_speech(job,media,proof,speech,deadline):
             result = {'status':'failed','reason':type(exc).__name__}
         atomic_json(receipt,result)
     segments = result.get('transcript',{}).get('segments') or []
-    if not segments or any(weak_speech(s) or not start-.02<=s['start']<=s['end']<=end+1 for s in segments):
-        return
-    speech['segments'] = sorted([s for s in speech['segments'] if s['end']<=start or s['start']>=end]+segments,
-                                 key=lambda s:s['start'])
-    speech.update(text=' '.join(s['text'] for s in speech['segments']),quality_gaps=[],
+    if not segments or any(weak_speech(s) or not start<=s['start']<=s['end']<=end for s in segments):
+        return False
+    retained=[]
+    for original in speech['segments']:
+        if original['end']<=start or original['start']>=end or original['start']==original['end']:
+            retained.append(original)
+            continue
+        cursor=original['start']
+        for replacement in sorted(segments,key=lambda s:s['start']):
+            if replacement['end']<=cursor:
+                continue
+            if replacement['start']>cursor+.15:
+                break
+            cursor=max(cursor,replacement['end'])
+        if cursor<original['end']-.15:
+            retained.append(original)
+    speech['segments'] = sorted(retained+segments,key=lambda s:s['start'])
+    speech.update(text=' '.join(s['text'] for s in speech['segments']),
+                  quality_gaps=[[s['start'],s['end']] for s in speech['segments'] if s.get('quality_issue') or weak_speech(s)],
                   recovery={'provider':'groq','model':request['model'],'ranges':[[start,end]],'receipt':str(receipt)})
+    return True
 
 
 def vision_worker(job, cache=None):
@@ -223,7 +249,7 @@ def enrich_visuals(job, media, proof, deadline, max_frames=0):
     interval = max(0.25, min(5, duration / (2 * count)))
     prefix = 'media-analysis-' + proof['sha256'][:12] + '-' + POLICY
     root = job / (prefix + '-' + str(count))
-    result = run(['/workspace/bin/video-pipeline', '--video', str(media), '--root', str(root),
+    result = run([PIPELINE_COMMAND, '--video', str(media), '--root', str(root),
                   '--local-only', '--max-vision-frames', str(count), '--frame-interval', str(interval),
                   '--workers', '1'], deadline, timeout=25)
     if result.returncode:
@@ -316,10 +342,14 @@ def enrich(job, deadline, max_frames=0):
     target = job / 'transcript.json'
     speech = read_json(target)
     audio_complete = (speech.get('media_sha256') == proof['sha256']
-                      and speech.get('analysis_policy') == POLICY
+                      and speech.get('analysis_policy') == AUDIO_POLICY
                       and speech.get('quality_checked') is True
                       and speech.get('processed_ranges') == [[0, proof['audio_duration']]])
     if not audio_complete:
+        if speech:
+            retained=job/('retained-transcript-'+digest(speech)[:16]+'.json')
+            if not retained.exists():
+                atomic_json(retained,speech)
         if proof['has_audio']:
             result = run([STT_PYTHON, str(Path(__file__)), '--transcribe', str(media)], deadline, timeout=65)
             if result.returncode:
@@ -331,7 +361,7 @@ def enrich(job, deadline, max_frames=0):
         else:
             speech = {'text': '', 'segments': [], 'status': 'no_audio_track'}
         speech.update(provider='local-whisper-small-vad', media_sha256=proof['sha256'],
-                      processed_ranges=[[0, proof['audio_duration']]],analysis_policy=POLICY, created_at=time.time())
+                      processed_ranges=[[0, proof['audio_duration']]],analysis_policy=AUDIO_POLICY, created_at=time.time())
         repair_speech(job,media,proof,speech,deadline)
         atomic_json(target, speech)
     if proof['has_video']:
@@ -340,12 +370,93 @@ def enrich(job, deadline, max_frames=0):
     return {'ok': True, 'provider': speech.get('provider'), 'visual_frames': proof.get('visual', {}).get('frames', 0)}
 
 
+def targeted(job, requests, deadline):
+    """Only validated source-adjacent ranges, with durable receipts before any paid call."""
+    job = valid_job(job)
+    proof = read_json(job/'media-proof.json')
+    media = Path(proof.get('file_path') or '/nonexistent').resolve()
+    if not media.is_relative_to(job) or not media.is_file():
+        raise ValueError('target_media_missing')
+    actual = probe(media, deadline)
+    if actual['sha256'] != proof.get('sha256'):
+        raise ValueError('target_media_changed')
+    if not isinstance(requests,list) or not 1<=len(requests)<=2:
+        raise ValueError('invalid_recovery_requests')
+    receipts = read_json(job/'targeted-recovery.json')
+    results = []
+    for request in requests:
+        kind,start,end = request['kind'],request['start'],request['end']
+        ceiling = proof['audio_duration'] if kind=='speech' else proof['duration']
+        if (kind not in {'speech','visual'} or not all(isinstance(t,(int,float)) and math.isfinite(t) for t in (start,end))
+                or not 0<=start<end<=ceiling or end-start>(120 if kind=='speech' else 30)):
+            raise ValueError('invalid_recovery_range')
+        analysis_policy=AUDIO_POLICY if kind=='speech' else POLICY
+        key = digest([proof['sha256'],kind,start,end,analysis_policy,'target-2'])
+        if key in receipts:
+            results.append({**receipts[key],'reused':True})
+            continue
+        if deadline-time.monotonic()<12:
+            results.append({'status':'deferred','kind':kind,'start':start,'end':end})
+            continue
+        entry = {'status':'started','kind':kind,'start':start,'end':end,'new_evidence':False,'analysis_policy':analysis_policy}
+        receipts[key] = entry
+        atomic_json(job/'targeted-recovery.json',receipts)
+        try:
+            if kind=='speech':
+                speech = read_json(job/'transcript.json')
+                before = digest(speech.get('segments'))
+                if repair_speech(job,media,proof,speech,deadline,request):
+                    atomic_json(job/'transcript.json',speech)
+                    ranges=speech.get('recovery',{}).get('ranges',[])
+                    if ranges:
+                        entry.update(processed_start=ranges[0][0],processed_end=ranges[-1][1])
+                entry['new_evidence'] = before != digest(read_json(job/'transcript.json').get('segments'))
+            else:
+                previous = read_json(job/'visual.json',[])
+                # ponytail: 64 total observations; more needs a separate long-video sampling policy.
+                stamps = [min(proof['duration']-.05,start+(end-start)*fraction) for fraction in (.1,.5,.9)]
+                stamps = [t for t in stamps if not any(abs(t-o['timestamp'])<.1 for o in previous)][:max(0,64-len(previous))]
+                if not stamps:
+                    entry.update(status='exhausted',reason='no_new_sampling_positions')
+                    continue
+                work = job/('target-visual-'+key[:16])
+                work.mkdir(exist_ok=True)
+                frames=[]
+                for index,stamp in enumerate(stamps):
+                    path=work/f'frame-{index}.jpg'
+                    output=run(['ffmpeg','-hide_banner','-loglevel','error','-y','-ss',str(stamp),
+                        '-i',str(media),'-frames:v','1','-q:v','3',str(path)],deadline,timeout=10)
+                    if output.returncode or not path.is_file() or not path.stat().st_size:
+                        raise ValueError('target_frame_unavailable')
+                    frames.append({'path':str(path),'timestamp':stamp,'reasons':['review_requested']})
+                atomic_json(work/'frame_candidates.json',frames)
+                atomic_json(work/'manifest.json',{'config':{'max_vision_frames':len(previous)+len(frames)}})
+                atomic_json(work/'ninax-existing-visual.json',previous)
+                output=run([str(PIPELINE/'.venv/bin/python'),str(Path(__file__)),'--vision',str(work),
+                            '--vision-cache',str(job/'vision-cache')],deadline,timeout=50,env=provider_env())
+                updated=read_json(work/'reviewed-visual.json',[])
+                if output.returncode or len(updated)<=len(previous) or not all(o.get('visual_summary') for o in updated):
+                    raise ValueError('target_visual_failed')
+                atomic_json(job/'visual.json',updated)
+                proof.setdefault('visual',{}).update(frames=len(updated),targeted=True)
+                atomic_json(job/'media-proof.json',proof)
+                entry['new_evidence']=True
+            entry['status']='completed' if entry['new_evidence'] else 'unchanged'
+        except Exception as exc:
+            entry.update(status='failed',reason=type(exc).__name__)
+        finally:
+            atomic_json(job/'targeted-recovery.json',receipts)
+            results.append(dict(entry))
+    return {'ok':any(r.get('new_evidence') and not r.get('reused') for r in results),'targets':results}
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('job')
     parser.add_argument('--transcribe', action='store_true')
     parser.add_argument('--vision', action='store_true')
     parser.add_argument('--repair-audio',action='store_true')
+    parser.add_argument('--targets',action='store_true')
     parser.add_argument('--max-frames',type=int,default=0)
     parser.add_argument('--vision-cache',type=Path)
     parser.add_argument('--seconds', type=float, default=100)
@@ -363,7 +474,7 @@ if __name__ == '__main__':
         else:
             deadline = time.monotonic()+args.seconds
             with job_lock(valid_job(args.job), deadline, 'enrichment.lock'):
-                result = enrich(Path(args.job), deadline,args.max_frames)
+                result = targeted(Path(args.job),json.load(sys.stdin),deadline) if args.targets else enrich(Path(args.job), deadline,args.max_frames)
         print(json.dumps(result, ensure_ascii=False))
     except Exception as exc:
         print(json.dumps({'ok': False, 'note': str(exc) if isinstance(exc, ValueError) else type(exc).__name__}))
