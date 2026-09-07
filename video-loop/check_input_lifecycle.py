@@ -9,10 +9,10 @@ sys.path.insert(0, str(Path(__file__).parent/'work/profile/plugins/line-platform
 from line_input_lifecycle import InputLifecycle
 
 
-def event(event_id, timestamp, text, *, kind="message", redelivery=False):
+def event(event_id, timestamp, text, *, kind="message", redelivery=False, message_id="m-1"):
     return {"type": kind, "webhookEventId": event_id, "timestamp": timestamp,
             "deliveryContext": {"isRedelivery": redelivery},
-            "message": {"id": "m-1", "type": "text", "text": text}}
+            "message": {"id": message_id, "type": "text", "text": text}}
 
 
 with tempfile.TemporaryDirectory(prefix="ninax-line-input-") as directory:
@@ -53,6 +53,18 @@ with tempfile.TemporaryDirectory(prefix="ninax-line-input-") as directory:
     assert second_job["delivery"]["status"] == "DELIVERED"
     assert second_job["binding"]["input_sha256"] == edited["input_sha256"]
 
+    same_text_other_message = restarted.accept(
+        event("evt-other-message", 3500, "new", message_id="m-2"), "C-room")
+    assert same_text_other_message["accepted"] and same_text_other_message["input_revision"] == 1
+    assert same_text_other_message["input_id"] != edited["input_id"]
+
+    edited_after_delivery = restarted.accept(
+        event("evt-after-delivery", 3600, "newest", kind="messageEdited"), "C-room")
+    assert edited_after_delivery["accepted"] and edited_after_delivery["input_revision"] == 3
+    assert json.loads(next((root / "jobs").glob("*.2.json")).read_text())["status"] == "COMPLETED"
+    message_state = json.loads((root / "messages" / f"{edited['input_id']}.json").read_text())
+    assert message_state["revisions"][1]["status"] == "SUPERSEDED"
+
     crash_event = event("evt-crash", 4000, "recover after receipt", kind="messageEdited")
     crash_accept = restarted.accept(crash_event, "C-other")
     assert crash_accept["accepted"]
@@ -80,4 +92,4 @@ with tempfile.TemporaryDirectory(prefix="ninax-line-input-") as directory:
     else:
         raise AssertionError("boolean input revision must fail closed")
 
-print(json.dumps({"gate": "line-input-lifecycle", "status": "PASS", "checks": 21}))
+print(json.dumps({"gate": "line-input-lifecycle", "status": "PASS", "checks": 26}))
