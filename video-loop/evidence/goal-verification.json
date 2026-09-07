@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "recorded_at": "2026-09-07T17:44:05.182147+00:00",
+  "recorded_at": "2026-09-07T23:20:24.487526+00:00",
   "goal_status": "in_progress",
   "source_baseline_commit": "88d4366c73f7de5d6656238bf0f4e8298c641f10",
   "policies": {
@@ -588,5 +588,40 @@
       "warnings": [],
       "unreadable_records": 0
     }
+  },
+  "official_line_payload_validation": {
+    "status": "PASS",
+    "bot_name": "NINAX",
+    "endpoint": "/v2/bot/message/validate/reply",
+    "cases": [
+      {
+        "http_status": 200,
+        "request_sha256": "61dcf4c220d9ddd6a9ca93e9bdfafe0da2d0b20ed3ab8f220716ee962121b5e1",
+        "message_count": 1,
+        "response": {}
+      },
+      {
+        "http_status": 200,
+        "request_sha256": "f603cf8e66c564e36b69a27cff1467741d92f007a1bc997ca01ea32cfeb72bdd",
+        "message_count": 1,
+        "response": {}
+      }
+    ],
+    "real_line_message_sent": false,
+    "phone_receipt_verified": false,
+    "scope": "Official LINE validation of the exact two distinct approved localhost payloads; no recipient or reply token sent",
+    "recorded_at": 1788822949.5167427
+  },
+  "local_ci_alternative": {
+    "runner": "video-loop/check_ci.py",
+    "workflow": ".github/workflows/check.yml",
+    "groups": [
+      "offline",
+      "pipeline-windows",
+      "hermes-contract"
+    ],
+    "status_context": "ninax/local-ci",
+    "acceptance": "All three fresh PASS receipts must reference the same clean commit before reporting success.",
+    "hosted_actions_billing_resolved": false
   }
 }

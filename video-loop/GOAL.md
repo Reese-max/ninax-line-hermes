@@ -9,7 +9,7 @@
 | 真實驗收 | 單支抓片收據與實際 LINE 收送紀錄；缺乏手機收件確認則明列待確認 | 原生 gateway 與 localhost 傳送通過；發現兩次未授權 Bright Data 測試已完成，費用未知，已停止新增計費驗收。手機收件待使用者確認 |
 | 長片 | 分段審稿、保存進度、整合後檢核實際 LINE payload，不截去尾段 | 5 分 45 秒實例經補查與續接後，五段及整合修訂檢核通過；再次續接 exit 0，沒有重複模型呼叫 |
 | 可重建與回復 | 明確相依版本、路徑設定、安裝檢核、隔離升級與回復演練 | 全新環境重建、模型下載、16 檔安裝／回復／重裝與零差異檢查通過 |
-| CI 與統計 | GitHub 自動檢查通過；成功率、延遲、補查與可得用量可查 | 統計已實作並驗證 token 用量；GitHub 因帳戶付款／支出上限擋住三個工作，尚未執行測試 |
+| CI 與統計 | GitHub 自動檢查通過；成功率、延遲、補查與可得用量可查 | 統計已實作並驗證 token 用量；hosted Actions 仍受帳務限制。已提供相同的本機檢查入口與獨立 `ninax/local-ci` 狀態，並補上 Windows 工作缺少的 Pillow 安裝 |
 
 正式服務、lease、webhook 不改歸屬；不新增帳號、付費方案或 API 金鑰。
 驗收結果以本次產生的收據為準，歷史 PASS 不代替新版本證據。
@@ -21,3 +21,5 @@
 補查稽核：先前 `final-gate-v4` 與 `final-gate-v5` 未預先放入來源影音，且測試的 jobs 路徑與管線輸出不同，因而觸發 Bright Data 後備。兩份不同遠端任務均已完成，不能繼續記為「尚未抓片」，也不能視為已授權的計費驗收。測試現在必須使用隔離複本及已備妥的影音，並設定 `NINAX_DISABLE_METERED_FETCH=1`；共用抓片入口在讀取憑證、狀態或呼叫後備之前就拒絕執行。
 
 修正後原生短片測試 exit 0、221.8 秒：首次摘要、「再說一次」及「完整一點」均通過，只送往 localhost，抓片收據為 0。未提供來源的測試會在服務啟動前回傳預期的 exit 2。`check_goal.py`、`check_video.py`、`check_delivery.py` 均 exit 0。正式環境只更新 `video_recovery.py`，日期備份已保存，再次安裝零差異；gateway PID 1301393、guard PID 1123259、lease generation 8 均未改變，LINE connected。
+
+替代 LINE 驗證：兩份不同的已審摘要送至官方 `/v2/bot/message/validate/reply`，均 HTTP 200；請求沒有收件者或 reply token，也沒有發出訊息。這份證據確認 API 接受訊息格式，不能當作手機已收到。計費抓片驗收持續停用。

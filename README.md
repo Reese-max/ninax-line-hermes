@@ -17,6 +17,8 @@ NINAX 的 LINE 機器人修復與影片補查實作。影片資訊不足時，�
 
 `video-loop/install.py`、`runtime-lock.json` 與 `video-settings.example.json` 提供新環境重建、版本核對、路徑設定及有收據的更新／回復。原始 `deploy.py` 與 `update_helpers.py` 保留作為歷史部署工具，不能直接套用到不同版本或主機。
 
+GitHub-hosted Actions 受帳務限制時，可用 `video-loop/check_ci.py` 在既有 Linux 與 Windows 主機執行 workflow 的相同檢查，保存同一 commit 的三組收據後，回報獨立的 `ninax/local-ci` 狀態。步驟見 [重建與驗收](video-loop/OPERATIONS.md)。正式 LINE 已另以官方驗證端點檢查兩份摘要格式，均 HTTP 200；手機實收仍須獨立確認。
+
 原主機的離線檢查：
 
 ```bash

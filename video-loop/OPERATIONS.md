@@ -49,7 +49,7 @@ python /srv/ninax/profile/hooks/video_workflow.py --report /srv/ninax/video-pipe
 
 前兩項只使用標準函式庫，在 Linux 執行。原影片管線的 `--self-test` 包含 Windows 排程案例，因此 CI 在真正的 Windows runner 執行它；不偽裝 Linux 平台。原生 Hermes 測試必須經 `scripts/run_tests.sh`。GitHub CI 包含離線回圈、回復、Windows 管線、原生 LINE 邊界與 gateway 回歸，不需要服務帳戶的金鑰。
 
-GitHub Actions 無法啟動時，可以在既有主機執行相同的三組檢查；workflow 與本機共用 `check_ci.py`。Linux 使用 Python 3.11，Windows 使用 Python 3.13；Hermes 使用依鎖定版本重建的隔離環境，不能指向正式服務。每組收據保存 commit、實際系統與 Python 版本、指令及結束碼；要求已提交且無追蹤檔差異，輸出必須使用新的檔案路徑。
+GitHub Actions 無法啟動時，可以在既有主機執行相同的三組檢查；workflow 與本機共用 `check_ci.py`。Linux 使用 Python 3.11，Windows 使用 Python 3.13 並依 `runtime-lock.json` 安裝管線相依套件；Hermes 使用依鎖定版本重建的隔離環境，不能指向正式服務。每組收據保存 commit、實際系統與 Python 版本、指令及結束碼；要求已提交且無追蹤檔差異，輸出必須使用新的檔案路徑。
 
 ```bash
 python -B video-loop/check_ci.py offline --out /tmp/ninax-offline.json
