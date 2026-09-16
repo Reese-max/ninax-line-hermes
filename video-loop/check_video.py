@@ -195,7 +195,11 @@ def check():
         resumed=recovery._metered_fetch(url,pending,time.monotonic()-1,root)
         assert resumed['remote_task_id']=='s_test' and resumed['metered_requests']==1
         bright.http_json=lambda *a,**kw:(_ for _ in ()).throw(RuntimeError('http_403:permission denied'))
-        rejected=recovery._metered_fetch(url,root/'rejected-request.json',time.monotonic()+5,root)
+        unauthorized=recovery._metered_fetch(url,root/'unauthorized-request.json',time.monotonic()+5,root)
+        assert unauthorized['reason']=='not_authorized' and unauthorized['ok'] is False
+        rejected_path=root/'rejected-request.json'
+        recovery.authorize_metered_fetch(url,rejected_path,ttl_seconds=60,authorized_by='tester')
+        rejected=recovery._metered_fetch(url,rejected_path,time.monotonic()+5,root)
         assert rejected['status']=='failed' and rejected['metered_requests']==0
         import psutil
         child_file=root/'child.pid'
