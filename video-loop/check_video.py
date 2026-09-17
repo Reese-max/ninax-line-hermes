@@ -194,9 +194,81 @@ def check():
         bright.http_json=lambda *a,**kw: (_ for _ in ()).throw(AssertionError('no time left; must not call provider'))
         resumed=recovery._metered_fetch(url,pending,time.monotonic()-1,root)
         assert resumed['remote_task_id']=='s_test' and resumed['metered_requests']==1
+        posts=[]
+        def stub(method,endpoint,*a,**kw):
+            if method=='POST':
+                posts.append(endpoint)
+            return {'snapshot_id':'s_new'} if method=='POST' else {'status':'running'}
+        bright.http_json=stub
+        for name,expected in (('denied-absent','metered_authorization_absent'),
+                              ('denied-mismatch','metered_authorization_mismatch'),
+                              ('denied-expired','metered_authorization_expired'),
+                              ('denied-consumed','metered_authorization_consumed')):
+            receipt=root/(name+'.json')
+            if expected!='metered_authorization_absent':
+                recovery.authorize_metered_fetch(url,receipt,time.monotonic()+5)
+                doc=ev.read_json(receipt)
+                if expected=='metered_authorization_mismatch':
+                    doc['authorization'].update(id='OtherReel99',url='https://www.instagram.com/reel/OtherReel99/')
+                elif expected=='metered_authorization_expired':
+                    doc['authorization']['expires_at']=time.time()-1
+                else:
+                    doc['authorization']['consumed']=True
+                ev.atomic_json(receipt,doc)
+            denied=recovery._metered_fetch(url,receipt,time.monotonic()+5,root)
+            assert denied['status']=='not_authorized' and denied['reason']==expected,(name,denied)
+            assert denied['metered_requests']==0 and not posts,name
+        # A denied receipt is not wedged: a later valid grant still authorizes one submission.
+        posts.clear()
+        recovery.authorize_metered_fetch(url,root/'denied-absent.json',time.monotonic()+5)
+        refetched=recovery._metered_fetch(url,root/'denied-absent.json',time.monotonic()+1,root)
+        assert refetched['status']=='submitted' and refetched['metered_requests']==1 and len(posts)==1
+        granted=root/'authorized-fetch.json'
+        grant=recovery.authorize_metered_fetch(url,granted,time.monotonic()+5)
+        assert grant['ok'] and grant['authorization']['id']=='CaseSensitiveID' and not grant['authorization']['consumed']
+        fetched=recovery._metered_fetch(url,granted,time.monotonic()+1,root)
+        assert fetched['status']=='submitted' and fetched['remote_task_id']=='s_new' and fetched['metered_requests']==1
+        receipt=ev.read_json(granted)
+        consumed=receipt['authorization']
+        assert consumed['consumed'] and consumed['consumed_at']>=consumed['authorized_at']
+        try:
+            recovery.authorize_metered_fetch(url,granted,time.monotonic()+5)
+            raise AssertionError('an in-flight submission must not accept a new grant')
+        except ValueError as exc:
+            assert str(exc)=='metered_submission_in_progress'
+        posts.clear()
+        again=recovery._metered_fetch(url,granted,time.monotonic()+1,root)
+        assert again['status']=='submitted' and not posts,'a submitted task is polled, never resubmitted'
+        def completing(method,endpoint,*a,**kw):
+            if method=='POST':
+                posts.append(endpoint)
+                return {'snapshot_id':'s_done'}
+            return {'status':'ready'} if '/progress/' in endpoint else [{'url':url,'shortcode':'CaseSensitiveID'}]
+        bright.http_json=completing
+        done_state=root/'completed-fetch.json'
+        recovery.authorize_metered_fetch(url,done_state,time.monotonic()+5)
+        done=recovery._metered_fetch(url,done_state,time.monotonic()+8,root)
+        assert done['ok'] and done['status']=='completed' and done['metered_requests']==1 and len(posts)==1
+        assert Path(done['job']).is_dir() and ev.matches(done['job'],url)
+        posts.clear()
+        finished=recovery._metered_fetch(url,done_state,time.monotonic()+5,root)
+        assert finished['status']=='completed' and finished.get('resumed') and not posts
+        bright.http_json=lambda *a,**kw:(_ for _ in ()).throw(TimeoutError('provider_timeout'))
+        unknown=root/'unknown-fetch.json'
+        recovery.authorize_metered_fetch(url,unknown,time.monotonic()+5)
+        lost=recovery._metered_fetch(url,unknown,time.monotonic()+5,root)
+        assert lost['status']=='unknown' and lost['metered_requests']==1
+        assert ev.read_json(unknown)['authorization']['consumed']
+        posts.clear()
+        retried=recovery._metered_fetch(url,unknown,time.monotonic()+5,root)
+        assert retried.get('resumed') and retried['status']=='unknown' and not posts
         bright.http_json=lambda *a,**kw:(_ for _ in ()).throw(RuntimeError('http_403:permission denied'))
-        rejected=recovery._metered_fetch(url,root/'rejected-request.json',time.monotonic()+5,root)
+        rejected_state=root/'rejected-request.json'
+        recovery.authorize_metered_fetch(url,rejected_state,time.monotonic()+5)
+        rejected=recovery._metered_fetch(url,rejected_state,time.monotonic()+5,root)
         assert rejected['status']=='failed' and rejected['metered_requests']==0
+        with patch.dict(recovery.os.environ,{'NINAX_DISABLE_METERED_FETCH':'1'}):
+            assert recovery.metered_fetch(url,granted,time.monotonic()+5,root)=={'ok':False,'reason':'metered_fetch_disabled'}
         import psutil
         child_file=root/'child.pid'
         script=('import subprocess,sys,time; from pathlib import Path; '
@@ -213,7 +285,7 @@ def check():
          'caption_is_not_complete','platform_and_case_identity','ready_cache_no_calls',
          'timestamp_validation','parallel_turn_ledgers','audit_missing_claims',
          'source_alignment','expired_url_replaced','changed_media_invalidates_proof','same_url_fetch_deduplicated',
-         'resume_accepted_task_without_post','nested_child_cleanup']}))
+         'resume_accepted_task_without_post','metered_fetch_requires_one_shot_authorization','nested_child_cleanup']}))
 
 
 if __name__=='__main__':
