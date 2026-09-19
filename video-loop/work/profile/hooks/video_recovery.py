@@ -322,6 +322,44 @@ def recover_original(evidence, candidates, job, deadline, ledger):
     return False
 
 
+def authorization_path(state_path):
+    return Path(state_path).with_name(Path(state_path).stem+'.authorization.json')
+
+
+def authorize_metered_fetch(url, state_path, ttl_seconds=300, authorized_by='operator'):
+    """Grant one positive single-use authorization receipt for this exact source."""
+    wanted = identity(url)
+    if not wanted or wanted['platform'] != 'instagram':
+        return {'ok': False, 'reason': 'metered_source_not_supported'}
+    now = time.time()
+    receipt = {'source': {'platform': wanted['platform'], 'id': wanted['id'], 'url': wanted['url']},
+               'issued_at': now, 'expires_at': now+ttl_seconds, 'consumed': False,
+               'authorized_by': authorized_by}
+    path = authorization_path(state_path)
+    atomic_json(path, receipt)
+    return {'ok': True, 'authorization': str(path), 'expires_at': receipt['expires_at']}
+
+
+def _check_metered_authorization(state_path, wanted):
+    """Fail-closed one-shot gate: consume a valid source-bound receipt or refuse."""
+    path = authorization_path(state_path)
+    receipt = read_json(path)
+    if not receipt:
+        return {'ok': False, 'reason': 'not_authorized'}
+    source = receipt.get('source') or {}
+    if source.get('platform') != wanted['platform'] or source.get('id') != wanted['id']:
+        return {'ok': False, 'reason': 'authorization_mismatch'}
+    if receipt.get('consumed'):
+        return {'ok': False, 'reason': 'authorization_consumed'}
+    now = time.time()
+    expires = receipt.get('expires_at')
+    if not isinstance(expires, (int, float)) or expires <= now:
+        return {'ok': False, 'reason': 'authorization_expired'}
+    receipt.update(consumed=True, consumed_at=now)
+    atomic_json(path, receipt)  # Consume before the POST: a lost response must not re-arm.
+    return {'ok': True, 'authorized_by': receipt.get('authorized_by'), 'receipt': path.name}
+
+
 def metered_fetch(url, state_path, deadline, jobs_root):
     """One single-URL async request. Uncertain acceptance is never retriggered."""
     if os.environ.get('NINAX_DISABLE_METERED_FETCH')=='1':
@@ -354,8 +392,12 @@ def _metered_fetch(url, state_path, deadline, jobs_root):
     if not tok:
         return {'ok': False, 'reason': 'provider_not_configured'}
     if not state:
+        auth = _check_metered_authorization(state_path, wanted)
+        if not auth['ok']:
+            return auth
         state = {'url': wanted['url'], 'backend': backend, 'status': 'starting', 'started_at': time.time(),
-                 'metered_requests': 1, 'history':history}
+                 'metered_requests': 1, 'history':history,
+                 'authorization': {'receipt': auth['receipt'], 'authorized_by': auth.get('authorized_by')}}
         atomic_json(state_path, state)  # A lost POST response must not create a second billable run.
         try:
             if backend == 'brightdata':
@@ -429,6 +471,9 @@ if __name__ == '__main__':
     parser.add_argument('--search')
     parser.add_argument('--resolve')
     parser.add_argument('--fetch')
+    parser.add_argument('--authorize-fetch')
+    parser.add_argument('--authorized-by', default='operator')
+    parser.add_argument('--ttl', type=float, default=300)
     parser.add_argument('--refresh')
     parser.add_argument('--visual-match',action='store_true')
     parser.add_argument('--job')
@@ -445,6 +490,8 @@ if __name__ == '__main__':
             result = search_worker(args.search)
         elif args.refresh:
             result = {'ok': refresh_metadata(args.refresh, Path(args.job), time.monotonic()+args.seconds)}
+        elif args.authorize_fetch:
+            result = authorize_metered_fetch(args.authorize_fetch, Path(args.state), args.ttl, args.authorized_by)
         else:
             result = metered_fetch(args.fetch, Path(args.state), time.monotonic()+args.seconds, args.jobs_root)
         print(json.dumps(result, ensure_ascii=False))
