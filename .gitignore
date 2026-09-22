@@ -46,6 +46,7 @@
 !/.github/workflows/check.yml
 !/video-loop/baseline.json
 !/video-loop/check_delivery.py
+!/video-loop/check_delivery_retry.py
 !/video-loop/check_cross_platform.py
 !/video-loop/check_line_video.py
 !/video-loop/check_live_summary.py

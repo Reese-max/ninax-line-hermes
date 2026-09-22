@@ -19,3 +19,32 @@ index 6449454..0518645 100644
          # Platform.LOCAL ("local") maps to the "cli" hint key the agent understands.
          # session_key is propagated via contextvars in _set_session_env() (_SESSION_KEY) and via
          # set_current_session_key() (_approval_session_key) below — both concurrency-safe and inherited by
+diff --git a/plugins/platforms/line/adapter.py b/plugins/platforms/line/adapter.py
+index 42237b9..8dd30c4 100644
+--- a/plugins/platforms/line/adapter.py
++++ b/plugins/platforms/line/adapter.py
+@@ -242,9 +242,10 @@ class _LineClient:
+         import aiohttp
+         return aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=timeout), trust_env=gateway_trust_env())
+ 
+-    async def _post_messages(self, url: str, label: str, payload: Dict[str, Any]) -> None:
++    async def _post_messages(self, url: str, label: str, payload: Dict[str, Any], *, headers: Optional[Dict[str, str]] = None) -> None:
++        merged = {**self._headers, **(headers or {})}
+         async with self._session(self._timeout) as session:
+-            async with session.post(url, headers=self._headers, json=payload) as resp:
++            async with session.post(url, headers=merged, json=payload) as resp:
+                 if resp.status >= 400:
+                     body = await resp.text()
+                     raise RuntimeError(f"LINE {label} {resp.status}: {body[:200]}")
+@@ -252,8 +253,9 @@ class _LineClient:
+     async def reply(self, reply_token: str, messages: List[Dict[str, Any]]) -> None:
+         await self._post_messages(LINE_REPLY_URL, "reply", {"replyToken": reply_token, "messages": messages})
+ 
+-    async def push(self, chat_id: str, messages: List[Dict[str, Any]]) -> None:
+-        await self._post_messages(LINE_PUSH_URL, "push", {"to": chat_id, "messages": messages})
++    async def push(self, chat_id: str, messages: List[Dict[str, Any]], *, retry_key: Optional[str] = None) -> None:
++        headers = {"X-Line-Retry-Key": retry_key} if retry_key else None
++        await self._post_messages(LINE_PUSH_URL, "push", {"to": chat_id, "messages": messages}, headers=headers)
+ 
+     async def loading(self, chat_id: str, seconds: int = 60) -> None:
+         """Loading indicator (DM only). LINE rejects this for groups/rooms."""
