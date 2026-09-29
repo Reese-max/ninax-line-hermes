@@ -55,13 +55,11 @@ def _message_content(message: Dict[str, Any], event_type: str) -> Dict[str, Any]
         raise ValueError("LINE message.type must be a non-empty string")
     if event_type == "messageEdited" and message_type != "text":
         raise ValueError("LINE messageEdited currently supports text messages only")
-    if message_type == "text":
-        text = message.get("text")
-        if not isinstance(text, str):
-            raise ValueError("LINE text message must contain string text")
-        return {"type": "text", "text": text}
-    # Access/quote tokens do not describe the user's content and can change
-    # independently.  Other message properties are canonicalized exactly.
+    if message_type == "text" and not isinstance(message.get("text"), str):
+        raise ValueError("LINE text message must contain string text")
+    # Message IDs establish identity, while access/quote tokens are transport
+    # metadata that may rotate independently. Preserve text and all semantic
+    # fields (including mentions, emoji descriptors and quoted-message context).
     return {k: v for k, v in message.items() if k not in {"id", "markAsReadToken", "quoteToken"}}
 
 
@@ -270,5 +268,20 @@ class InputLifecycle:
             job = _strict_read(path)
             if not job:
                 raise ValueError("LINE delivery has no job receipt")
-            _atomic_json(path, {**job, "delivery": {"status": status, "payload_sha256": payload_sha256,
-                                                     "recorded_at": time.time()}})
+            attempt = {"status": status, "payload_sha256": payload_sha256, "recorded_at": time.time()}
+            attempts = job.get("delivery_attempts")
+            if attempts is None:
+                attempts = []
+            elif not isinstance(attempts, list) or any(not isinstance(item, dict) for item in attempts):
+                raise ValueError("invalid LINE delivery attempt history")
+            else:
+                attempts = list(attempts)
+            previous = job.get("delivery")
+            if (isinstance(previous, dict) and previous.get("status") != "NOT_ATTEMPTED"
+                    and previous not in attempts):
+                attempts.append(previous)
+            attempts.append(attempt)
+            # Keep the first successful delivery as the durable primary receipt.
+            # Later stale/ambiguous attempts remain visible in append-only history.
+            delivery = previous if isinstance(previous, dict) and previous.get("status") == "DELIVERED" else attempt
+            _atomic_json(path, {**job, "delivery": delivery, "delivery_attempts": attempts})
