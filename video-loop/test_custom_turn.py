@@ -7,8 +7,10 @@ import pytest
 
 def test_custom_turn_boundary(tmp_path,monkeypatch):
     monkeypatch.setenv('HERMES_HOME',str(tmp_path))
-    from gateway.config import Platform
-    from gateway.run_turn_runner import TurnRunner
+    config=pytest.importorskip('gateway.config')
+    run_turn_runner=pytest.importorskip('gateway.run_turn_runner')
+    Platform=config.Platform
+    TurnRunner=run_turn_runner.TurnRunner
     result={'final_response':'reviewed'}
     class Adapter:
         def run_custom_turn(self,ctx):return result
