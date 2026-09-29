@@ -9,10 +9,11 @@ sys.path.insert(0, str(Path(__file__).parent/'work/profile/plugins/line-platform
 from line_input_lifecycle import InputLifecycle
 
 
-def event(event_id, timestamp, text, *, kind="message", redelivery=False, message_id="m-1"):
+def event(event_id, timestamp, text, *, kind="message", redelivery=False, message_id="m-1", **message_fields):
+    message = {"id": message_id, "type": "text", "text": text}
+    message.update(message_fields)
     return {"type": kind, "webhookEventId": event_id, "timestamp": timestamp,
-            "deliveryContext": {"isRedelivery": redelivery},
-            "message": {"id": message_id, "type": "text", "text": text}}
+            "deliveryContext": {"isRedelivery": redelivery}, "message": message}
 
 
 with tempfile.TemporaryDirectory(prefix="ninax-line-input-") as directory:
@@ -39,6 +40,27 @@ with tempfile.TemporaryDirectory(prefix="ninax-line-input-") as directory:
     conflict = store.accept(event("evt-conflict", 3000, "ambiguous", kind="messageEdited"), "C-room")
     assert conflict["disposition"] == "TIMESTAMP_CONFLICT" and not conflict["accepted"]
 
+    semantic_original = store.accept(event(
+        "evt-semantic-1", 1000, "mention here", kind="messageEdited",
+        mention={"mentionees": [{"type": "user", "userId": "U1", "index": 0, "length": 7}]},
+        emojis=[{"index": 0, "productId": "p1", "emojiId": "e1"}],
+        quotedMessageId="quoted-1"), "C-meta")
+    assert semantic_original["accepted"] and semantic_original["input_revision"] == 1
+    semantic_edit = store.accept(event(
+        "evt-semantic-2", 2000, "mention here", kind="messageEdited",
+        mention={"mentionees": [{"type": "user", "userId": "U2", "index": 0, "length": 7}]},
+        emojis=[{"index": 0, "productId": "p1", "emojiId": "e2"}],
+        quotedMessageId="quoted-2"), "C-meta")
+    assert semantic_edit["accepted"] and semantic_edit["input_revision"] == 2
+    assert semantic_edit["input_sha256"] != semantic_original["input_sha256"]
+    token_only_edit = store.accept(event(
+        "evt-semantic-tokens", 3000, "mention here", kind="messageEdited",
+        mention={"mentionees": [{"type": "user", "userId": "U2", "index": 0, "length": 7}]},
+        emojis=[{"index": 0, "productId": "p1", "emojiId": "e2"}],
+        quotedMessageId="quoted-2", quoteToken="rotated-token", markAsReadToken="rotated-read"), "C-meta")
+    assert token_only_edit["disposition"] == "DUPLICATE_CONTENT"
+    assert token_only_edit["input_revision"] == semantic_edit["input_revision"]
+
     restarted = InputLifecycle(root)
     repeat_after_restart = restarted.accept(event("evt-2", 2000, "new", kind="messageEdited"), "C-room")
     assert repeat_after_restart["disposition"] == "DUPLICATE_EVENT"
@@ -62,6 +84,12 @@ with tempfile.TemporaryDirectory(prefix="ninax-line-input-") as directory:
         event("evt-after-delivery", 3600, "newest", kind="messageEdited"), "C-room")
     assert edited_after_delivery["accepted"] and edited_after_delivery["input_revision"] == 3
     assert json.loads(next((root / "jobs").glob("*.2.json")).read_text())["status"] == "COMPLETED"
+    restarted.record_delivery(edited, "REJECTED_STALE", "b" * 64)
+    second_job = json.loads(next((root / "jobs").glob("*.2.json")).read_text())
+    assert second_job["delivery"]["status"] == "DELIVERED"
+    assert second_job["delivery"]["payload_sha256"] == "a" * 64
+    assert [attempt["status"] for attempt in second_job["delivery_attempts"]] == ["DELIVERED", "REJECTED_STALE"]
+    assert [attempt["payload_sha256"] for attempt in second_job["delivery_attempts"]] == ["a" * 64, "b" * 64]
     message_state = json.loads((root / "messages" / f"{edited['input_id']}.json").read_text())
     assert message_state["revisions"][1]["status"] == "SUPERSEDED"
 
@@ -92,4 +120,4 @@ with tempfile.TemporaryDirectory(prefix="ninax-line-input-") as directory:
     else:
         raise AssertionError("boolean input revision must fail closed")
 
-print(json.dumps({"gate": "line-input-lifecycle", "status": "PASS", "checks": 26}))
+print(json.dumps({"gate": "line-input-lifecycle", "status": "PASS", "checks": 31}))
