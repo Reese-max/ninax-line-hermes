@@ -1,0 +1,15 @@
+{
+  "repo": "Reese-max/ninax-line-hermes",
+  "issue": 12,
+  "base_sha": "af82091d8178caefb1ce37ac885f2b6284a3b42e",
+  "red_proof": "Before implementation, Git Bash ran: wsl.exe -d Ubuntu -u xsx --exec bash -lc 'exec /home/xsx/.cache/ninax-pr12-review-af82091/venv/bin/python -X utf8 -B -m pytest -q tests/test_line_push_retry.py -k review --tb=short' (exit 1). Nine product regression cases failed: test_review_push_key_is_uuid_and_persisted_before_send -> ValueError: badly formed hexadecimal UUID string; test_review_hung_push_retries_inside_delivery_deadline[False/True] -> success=False, error='TimeoutError'; test_review_unaccepted_response_fails_without_retry[response0/1/2] -> AssertionError: assert not True; test_review_accepted_409_does_not_wait_for_error_body -> assert 2 == 1; test_review_non_transient_transport_error_is_not_retried[error0/1] -> AssertionError: assert not True. The CI test's text-mode subprocess stub was corrected before touching production code, then the same command with '-k review_ci' exited 1: test_review_ci_runs_push_retry_regressions -> assert any(str(Path(__file__).resolve()) in command for command in commands), E assert False; 1 failed, 19 deselected in 0.47s. All ten regression cases pass after the fixes.",
+  "test_command": "wsl.exe -d Ubuntu -u xsx --exec bash -lc 'exec /home/xsx/.cache/ninax-pr12-review-af82091/venv/bin/python -X utf8 -B -m pytest -q --tb=short'",
+  "test_exit": 0,
+  "tests_passed": 21,
+  "tests_failed": 0,
+  "summary": "Fixed five review findings with ten regression cases: standards-compliant persisted UUID keys; actual stalled-request retries within the existing delivery cap; strict 2xx/documented 409 acceptance without waiting for error bodies; transient-only retry classification; and inclusion in the Hermes CI contract runner. Full repository pytest: 21 passed, 0 failed (14.92s, exit 0). The existing Hermes per-file contract command including the new file: 66 passed, 0 failed across five files (26.8s, exit 0). check_delivery.py, check_video.py, check_goal.py, check_install.py, compileall and git diff --check all exited 0. Tests used WSL Ubuntu with isolated Python 3.11.15, the locked Hermes source 13e72fb205b735df679e0fd5f5996a34ac4accc6 and locked package versions.",
+  "not_done": [
+    "No push, merge, deployment, real LINE send, paid provider call or phone-receipt verification was performed.",
+    "Hosted GitHub Actions and the unrelated Windows pipeline job were not run. The Git-Bash-runnable replay command uses the prepared isolated WSL environment at /home/xsx/.cache/ninax-pr12-review-af82091/venv."
+  ]
+}

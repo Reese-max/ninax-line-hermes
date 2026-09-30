@@ -1,0 +1,13 @@
+{
+  "pr": 12,
+  "head": "af82091d8178caefb1ce37ac885f2b6284a3b42e",
+  "findings": [
+    {"severity": "high", "file": "video-loop/work/profile/plugins/line-platform/__init__.py", "line": 224, "issue": "The retry key is a 64-character SHA-256 digest, but LINE requires a hexadecimal UUID. The fake transport accepts an invalid header that the real Push API rejects. Generate a standards-compliant UUID bound to the same turn, recipient and approved payload before persisting it."},
+    {"severity": "med", "file": "video-loop/work/profile/plugins/line-platform/__init__.py", "line": 261, "issue": "A hung Push uses the native 15-second request timeout inside an overall delivery timeout of at most 10 seconds. The outer cancellation aborts the entire retry loop before a TimeoutError can be retried, including invalid-Reply-token fallback. Reserve time for later attempts within the existing delivery deadline."},
+    {"severity": "med", "file": "video-loop/work/profile/plugins/line-platform/__init__.py", "line": 265, "issue": "The wrapper accepts non-2xx statuses below 400 and every 409 without checking x-line-accepted-request-id. Reading an error body before classifying the status also turns a known 400 into a retry if that read times out, and needlessly retries an already-accepted 409. Classify acceptance and retryability from the response status and documented receipt header."},
+    {"severity": "med", "file": "video-loop/work/profile/plugins/line-platform/__init__.py", "line": 298, "issue": "The retry predicate defaults to retrying nearly every exception and all aiohttp ClientError subclasses, including non-transient configuration/programming failures. This violates the Push-only transient-failure retry policy; allow only 5xx, timeouts and connection failures."},
+    {"severity": "med", "file": "tests/test_line_push_retry.py", "line": 1, "issue": "No workflow job executes the new retry tests: check_ci.py's hermes-contract command explicitly lists only the existing native tests and test_custom_turn.py. Add this regression file to that existing command so CI enforces the new delivery contract."}
+  ],
+  "fixed": true,
+  "summary": "Fixed five defects in UUID retry keys, stalled-request recovery, response acceptance, transient-error classification and CI test wiring. Ten new regression cases failed before the fixes and now pass; the full repository suite passed 21 tests and the existing Hermes contract runner passed 66 tests, with delivery, video, goal and rollback checks also green. No external sends, deployment or push were performed; hosted CI and phone receipt remain unverified."
+}

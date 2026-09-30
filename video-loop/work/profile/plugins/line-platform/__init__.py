@@ -7,6 +7,7 @@ import re
 import sys
 import time
 from types import SimpleNamespace
+from uuid import NAMESPACE_URL, uuid5
 
 from hermes_constants import get_hermes_home
 from plugins.platforms.line import adapter as native
@@ -23,9 +24,9 @@ _PUSH_MAX_ATTEMPTS = 3
 _PUSH_BACKOFF_S = (0.5, 1.0)
 try:
     import aiohttp as _aiohttp
-    _TRANSIENT_PUSH_ERRORS = (TimeoutError, asyncio.TimeoutError, _aiohttp.ClientError)
+    _TRANSIENT_PUSH_ERRORS = (TimeoutError, _aiohttp.ClientConnectionError)
 except ImportError:
-    _TRANSIENT_PUSH_ERRORS = (TimeoutError, asyncio.TimeoutError)
+    _TRANSIENT_PUSH_ERRORS = (TimeoutError,)
 URL_RE = re.compile(r'https://[^\s<>"\']+')
 RECALL = re.compile(r'再(?:說|講)一次|重複.{0,4}(?:摘要|重點)')
 CONTINUE = re.compile(r'繼續摘要|繼續核對')
@@ -221,8 +222,8 @@ class VideoLineAdapter(native.LineAdapter):
         if prior.get('status') in {'sending','unknown','delivered'}:
             return SendResult(success=False,error='video_delivery_already_attempted')
         state['delivery'] = 'sending'
-        state['retry_key'] = digest(['line-retry-v1',state['binding']['turn_id'],chat_id,
-                                     state['approval']['payload_sha256']])
+        state['retry_key'] = str(uuid5(NAMESPACE_URL,digest(['line-retry-v1',state['binding']['turn_id'],chat_id,
+                                                          state['approval']['payload_sha256']])))
         self._record_delivery(state)
         owned_token = state.pop('reply_token','')
         if (self._reply_tokens.get(chat_id) or ('',0))[0] == owned_token:
@@ -233,7 +234,7 @@ class VideoLineAdapter(native.LineAdapter):
             remaining = min(10,state.get('deadline',time.monotonic()+10)-time.monotonic())
             if remaining<=0:
                 raise TimeoutError('video_delivery_deadline')
-            async with asyncio.timeout(remaining):
+            async with asyncio.timeout(remaining) as delivery_timeout:
                 if used_reply and not force_push:
                     try:
                         await self._client.reply(token,messages)
@@ -241,9 +242,9 @@ class VideoLineAdapter(native.LineAdapter):
                         # Only a definite invalid-token rejection permits push. A timeout may have posted.
                         if not (str(exc).startswith('LINE reply 400:') and 'Invalid reply token' in str(exc)):
                             raise
-                        await self._push_with_retry(chat_id,messages,state)
+                        await self._push_with_retry(chat_id,messages,state,deadline=delivery_timeout.when())
                 else:
-                    await self._push_with_retry(chat_id,messages,state)
+                    await self._push_with_retry(chat_id,messages,state,deadline=delivery_timeout.when())
         except Exception as exc:
             state['delivery'] = 'unknown'
             self._record_delivery(state)
@@ -255,18 +256,19 @@ class VideoLineAdapter(native.LineAdapter):
     async def _push_once(self, chat_id, messages, retry_key):
         # The pinned _LineClient.push cannot attach X-Line-Retry-Key, so issue the
         # same POST through the client's own session/headers/timeout. HTTP
-        # rejections keep the pinned _post_messages contract: RuntimeError
-        # 'LINE push <status>: <body>'; timeout/connection errors propagate.
+        # rejections retain the native RuntimeError status prefix. Classify
+        # headers immediately: an unreadable error body must not change status.
         client = self._client
         async with client._session(client._timeout) as session:
             async with session.post(native.LINE_PUSH_URL,
                                     headers={**client._headers,'X-Line-Retry-Key':retry_key},
                                     json={'to':chat_id,'messages':messages}) as resp:
-                if resp.status >= 400:
-                    body = await resp.text()
-                    raise RuntimeError(f'LINE push {resp.status}: {body[:200]}')
+                if (200 <= resp.status < 300 or
+                        resp.status == 409 and resp.headers.get('x-line-accepted-request-id')):
+                    return
+                raise RuntimeError(f'LINE push {resp.status}')
 
-    async def _push_with_retry(self, chat_id, messages, state):
+    async def _push_with_retry(self, chat_id, messages, state, *, deadline):
         # Bounded same-key retries for ambiguous Push outcomes (5xx, timeout,
         # connection loss). LINE keeps a retry key for 24h — far longer than
         # this loop — so repeating the identical request cannot duplicate at
@@ -274,18 +276,19 @@ class VideoLineAdapter(native.LineAdapter):
         attempt = 0
         while True:
             try:
-                await self._push_once(chat_id,messages,state['retry_key'])
+                remaining = deadline-time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError('video_delivery_deadline')
+                # A hung request must expire before the overall delivery cap.
+                async with asyncio.timeout(remaining/(_PUSH_MAX_ATTEMPTS-attempt)):
+                    await self._push_once(chat_id,messages,state['retry_key'])
                 return
             except Exception as exc:
-                # A 409 on a keyed push can only be our own duplicate: the key is
-                # unique per (turn, recipient, payload), so LINE already accepted it.
-                if self._push_status(exc) == 409:
-                    return
                 attempt += 1
                 if attempt >= _PUSH_MAX_ATTEMPTS or not self._push_retryable(exc):
                     raise
                 backoff = _PUSH_BACKOFF_S[min(attempt-1,len(_PUSH_BACKOFF_S)-1)]
-                if time.monotonic()+backoff > state.get('deadline',time.monotonic()):
+                if time.monotonic()+backoff >= deadline:
                     raise
                 await asyncio.sleep(backoff)
 
@@ -299,11 +302,7 @@ class VideoLineAdapter(native.LineAdapter):
         if isinstance(exc, _TRANSIENT_PUSH_ERRORS):
             return True
         status = cls._push_status(exc)
-        if status is not None:
-            return status >= 500
-        # TypeError/AttributeError mean a transport that cannot carry the key;
-        # fail fast instead of burning the bounded attempts.
-        return not isinstance(exc, (TypeError, AttributeError))
+        return status is not None and 500 <= status < 600
 
     def _record_delivery(self, state):
         atomic_json(self._video_state/(state['binding']['turn_id']+'.delivery.json'),

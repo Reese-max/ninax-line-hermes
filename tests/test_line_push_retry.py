@@ -9,10 +9,13 @@ fallback). Real LINE sends are never attempted here.
 """
 import asyncio
 import importlib.util
+import json
 import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 
@@ -237,3 +240,96 @@ def test_transport_without_push_support_fails_closed(rig):
     state = _state(plugin, home, 'retry-bare')
     assert not _send(plugin, adapter, state).success
     assert state['delivery'] == 'unknown'
+
+
+def test_review_push_key_is_uuid_and_persisted_before_send(rig, monkeypatch):
+    plugin, adapter, client, home = rig
+    state = _state(plugin, home, 'uuid-key')
+    receipts = []
+    original = _Session.post
+
+    def post(session, *args, **kwargs):
+        receipts.append(plugin.read_json(adapter._video_state / 'uuid-key.delivery.json'))
+        return original(session, *args, **kwargs)
+
+    monkeypatch.setattr(_Session, 'post', post)
+    assert _send(plugin, adapter, state).success
+    key = _keys(client)[0]
+    assert str(UUID(key)) == key, 'LINE requires a hexadecimal UUID, not a SHA-256 digest'
+    assert receipts[0]['status'] == 'sending' and receipts[0]['retry_key'] == key
+    assert receipts[0]['binding'] == state['binding']
+    assert receipts[0]['payload_sha256'] == state['approval']['payload_sha256']
+
+
+@pytest.mark.parametrize('invalid_reply', [False, True])
+def test_review_hung_push_retries_inside_delivery_deadline(rig, monkeypatch, invalid_reply):
+    plugin, adapter, client, home = rig
+    monkeypatch.setattr(plugin, '_PUSH_BACKOFF_S', (0, 0))
+    state = _state(plugin, home, 'hung-push', deadline=time.monotonic() + 1)
+    if invalid_reply:
+        state.update(reply_token='expired-at-server', reply_expires=time.time() + 30)
+        client.reply_error = RuntimeError('LINE reply 400: Invalid reply token')
+
+    class HungResponse(_Resp):
+        async def __aenter__(self):
+            await asyncio.Future()
+
+    client.plan = [HungResponse(200), _Resp(200)]
+    assert _send(plugin, adapter, state).success
+    assert len(client.posts) == 2 and len(set(_keys(client))) == 1
+    assert len(client.replies) == int(invalid_reply)
+
+
+class _UnreadableResp(_Resp):
+    async def text(self):
+        raise TimeoutError('error response body stalled')
+
+
+@pytest.mark.parametrize('response', [_Resp(409), _Resp(302), _UnreadableResp(400)])
+def test_review_unaccepted_response_fails_without_retry(rig, response):
+    plugin, adapter, client, home = rig
+    client.plan = [response, _Resp(200)]
+    state = _state(plugin, home, 'unaccepted-response')
+    assert not _send(plugin, adapter, state).success
+    assert len(client.posts) == 1 and state['delivery'] == 'unknown'
+
+
+def test_review_accepted_409_does_not_wait_for_error_body(rig):
+    plugin, adapter, client, home = rig
+    client.plan = [_UnreadableResp(409, headers={'x-line-accepted-request-id': 'req-1'})]
+    assert _send(plugin, adapter, _state(plugin, home, 'accepted-response')).success
+    assert len(client.posts) == 1
+
+
+@pytest.mark.parametrize('error', [RuntimeError('Session is closed'), ValueError('invalid header')])
+def test_review_non_transient_transport_error_is_not_retried(rig, error):
+    plugin, adapter, client, home = rig
+    client.plan = [error, _Resp(200)]
+    state = _state(plugin, home, 'permanent-error')
+    assert not _send(plugin, adapter, state).success
+    assert len(client.posts) == 1 and state['delivery'] == 'unknown'
+
+
+def test_review_ci_runs_push_retry_regressions(tmp_path, monkeypatch):
+    spec = importlib.util.spec_from_file_location('ninax_ci', ROOT / 'video-loop/check_ci.py')
+    ci = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ci)
+    hermes = tmp_path / 'hermes'
+    (hermes / 'gateway').mkdir(parents=True)
+    shutil.copyfile(ROOT / 'video-loop/work/hermes/gateway/run_turn_runner.py',
+                    hermes / 'gateway/run_turn_runner.py')
+    lock = json.loads((ROOT / 'video-loop/runtime-lock.json').read_text())
+    monkeypatch.setattr(ci.sys, 'argv', ['check_ci.py', 'hermes-contract', '--hermes', str(hermes),
+                                      '--out', str(tmp_path / 'receipt.json')])
+    monkeypatch.setattr(ci.sys, 'platform', 'linux')
+    monkeypatch.setattr(ci.sys, 'version_info', (3, 11))
+    monkeypatch.setattr(ci.subprocess, 'check_output', lambda *a, **kw: lock['hermes']['commit'])
+    commands = []
+
+    def run(command, **kwargs):
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout='', stderr='')
+
+    monkeypatch.setattr(ci.subprocess, 'run', run)
+    assert ci.main() == 0
+    assert any(str(Path(__file__).resolve()) in command for command in commands), commands
