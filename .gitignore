@@ -85,3 +85,6 @@
 !/video-loop/work/profile/skills/media/video-timeline-pipeline/SKILL.md
 !/work/gate-e/bin/irisx_guard.py
 !/work/gate-e/standby/run-watch.sh
+!/requirements.txt
+!/tests/
+!/tests/test_metered_authorization.py

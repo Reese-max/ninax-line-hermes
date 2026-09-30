@@ -1,0 +1,5 @@
+# Test tooling for this repository. The check scripts under video-loop/ and
+# tests/ run on the system Python; pytest collects tests/test_*.py and
+# video-loop/test_custom_turn.py (the latter needs the pinned Hermes
+# `gateway` package installed, as the hermes-contract CI job arranges).
+pytest==9.1.1

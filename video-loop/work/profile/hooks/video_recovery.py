@@ -343,6 +343,8 @@ def authorize_metered_fetch(url, state_path, deadline, seconds=600):
     before any provider POST. An in-flight or ambiguous submission can never
     be re-authorized, so an uncertain acceptance still cannot be retriggered.
     """
+    if os.environ.get('NINAX_DISABLE_METERED_FETCH')=='1':
+        return {'ok':False,'reason':'metered_fetch_disabled'}
     wanted = identity(url)
     if not wanted or wanted['platform'] != 'instagram':
         raise ValueError('metered_source_not_supported')
@@ -353,7 +355,8 @@ def authorize_metered_fetch(url, state_path, deadline, seconds=600):
         old_identity = identity(state.get('url') or '')
         if state and (not old_identity or any(old_identity[k] != wanted[k] for k in ('platform','id'))):
             raise ValueError('provider_request_identity_mismatch')
-        if state.get('status') in {'starting', 'pending', 'submitted', 'unknown'}:
+        if (state.get('status') in {'starting', 'pending', 'submitted', 'unknown'}
+                or (state.get('remote_task_id') and state.get('status') not in {'failed', 'completed'})):
             raise ValueError('metered_submission_in_progress')
         if state.get('status') in {'failed', 'completed'}:
             # Re-authorizing a finished task retires its receipt into history.
@@ -371,20 +374,26 @@ def authorize_metered_fetch(url, state_path, deadline, seconds=600):
 
 
 def _authorization_denial(grant, wanted, now):
-    """A grant is positive only when unconsumed, unexpired, and bound to this source."""
+    """A grant is positive only when scoped, unconsumed, in-window, and bound to this source."""
     if not isinstance(grant, dict):
         return 'metered_authorization_absent'
     if grant.get('consumed'):
         return 'metered_authorization_consumed'
+    if grant.get('scope') != 'single_metered_submission':
+        return 'metered_authorization_invalid'
     granted = identity(grant.get('url') or '')
     if (not granted or granted['platform'] != grant.get('platform') or granted['id'] != grant.get('id')
             or any(granted[k] != wanted[k] for k in ('platform','id'))):
         return 'metered_authorization_mismatch'
     try:
-        if not float(grant['authorized_at']) <= now < float(grant['expires_at']):
-            return 'metered_authorization_expired'
+        authorized_at = float(grant['authorized_at'])
+        expires_at = float(grant['expires_at'])
     except (KeyError, TypeError, ValueError):
         return 'metered_authorization_invalid'
+    if not authorized_at <= now:
+        return 'metered_authorization_invalid'
+    if not now < expires_at:
+        return 'metered_authorization_expired'
     return None
 
 
