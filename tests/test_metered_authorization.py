@@ -75,6 +75,10 @@ def test_absent_grant_denies_before_provider(rig):
      lambda grant: grant.pop('scope')),
     ('not-yet-valid', 'metered_authorization_invalid',
      lambda grant: grant.update(authorized_at=time.time() + 3600)),
+    ('infinite-expiry', 'metered_authorization_invalid',
+     lambda grant: grant.update(expires_at=float('inf'))),
+    ('nan-expiry', 'metered_authorization_invalid',
+     lambda grant: grant.update(expires_at=float('nan'))),
 ])
 def test_positive_grant_required(rig, name, reason, tamper):
     root, posts = rig
@@ -189,6 +193,14 @@ def test_recorded_remote_task_blocks_new_grant(rig):
                              'remote_task_id': 's_orphan'})
     with pytest.raises(ValueError, match='metered_submission_in_progress'):
         recovery.authorize_metered_fetch(URL, receipt, time.monotonic() + 5)
+
+
+def test_authorize_rejects_non_finite_lifetime(rig):
+    root, _ = rig
+    with pytest.raises(ValueError, match='metered_authorization_invalid'):
+        recovery.authorize_metered_fetch(URL, root / 'inf-grant.json',
+                                         time.monotonic() + 5, seconds=float('inf'))
+    assert not (root / 'inf-grant.json').exists()
 
 
 def test_kill_switch_also_blocks_grant_issuance(rig, monkeypatch):

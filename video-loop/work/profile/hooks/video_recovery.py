@@ -364,10 +364,13 @@ def authorize_metered_fetch(url, state_path, deadline, seconds=600):
                      [{k:state.get(k) for k in ('backend','remote_task_id','status','started_at')}])[-20:]}
         for stale in ('ok', 'status', 'reason', 'denied_at', 'metered_requests'):
             state.pop(stale, None)  # A grant receipt awaits its fetch; stale outcomes mislead audits.
+        seconds = float(seconds)
+        if not math.isfinite(seconds):
+            raise ValueError('metered_authorization_invalid')
         now = time.time()
         grant = {'platform': wanted['platform'], 'id': wanted['id'], 'url': wanted['url'],
                  'scope': 'single_metered_submission', 'authorized_at': now,
-                 'expires_at': now+max(1,float(seconds)), 'consumed': False}
+                 'expires_at': now+max(1,seconds), 'consumed': False}
         state.update(url=wanted['url'], authorization=grant)
         atomic_json(state_path, state)
         return {'ok': True, 'state': str(state_path), 'authorization': grant}
@@ -389,6 +392,8 @@ def _authorization_denial(grant, wanted, now):
         authorized_at = float(grant['authorized_at'])
         expires_at = float(grant['expires_at'])
     except (KeyError, TypeError, ValueError):
+        return 'metered_authorization_invalid'
+    if not (math.isfinite(authorized_at) and math.isfinite(expires_at)):
         return 'metered_authorization_invalid'
     if not authorized_at <= now:
         return 'metered_authorization_invalid'
