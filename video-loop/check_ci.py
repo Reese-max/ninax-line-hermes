@@ -43,7 +43,7 @@ def main():
                   (ROOT,[sys.executable,'-B','video-loop/check_delivery.py',str(hermes)]),
                   (hermes,['bash','scripts/run_tests.sh','-j','2','tests/gateway/test_line_plugin.py',
                     'tests/gateway/test_stream_final_contract.py','tests/gateway/test_stream_final_adoption_gate.py',
-                    str(BASE/'test_custom_turn.py'),'-q'])]
+                    str(BASE/'test_custom_turn.py'),str(ROOT/'tests/test_line_input_lifecycle.py'),'-q'])]
     receipt={'group':args.group,'status':'RUNNING','commit':revision,'platform':platform.platform(),
              'python':platform.python_version(),'runner_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
              'started_at':datetime.now(timezone.utc).isoformat(),'metered_fetch_disabled':True,'checks':[]}

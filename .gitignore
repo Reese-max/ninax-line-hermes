@@ -81,7 +81,11 @@
 !/video-loop/work/profile/hooks/video_workflow.py
 !/video-loop/work/profile/plugins/line-platform/README.md
 !/video-loop/work/profile/plugins/line-platform/__init__.py
+!/video-loop/work/profile/plugins/line-platform/line_input_lifecycle.py
 !/video-loop/work/profile/plugins/line-platform/plugin.yaml
 !/video-loop/work/profile/skills/media/video-timeline-pipeline/SKILL.md
 !/work/gate-e/bin/irisx_guard.py
 !/work/gate-e/standby/run-watch.sh
+!/requirements.txt
+!/tests/
+!/tests/test_line_input_lifecycle.py
