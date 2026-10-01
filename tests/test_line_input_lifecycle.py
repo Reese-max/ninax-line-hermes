@@ -274,6 +274,155 @@ def test_restart_marks_orphaned_started_job_interrupted(tmp_path):
     assert duplicate['disposition'] == 'DUPLICATE_EVENT' and not duplicate['accepted']
 
 
+def test_ledger_duplicate_redelivery_still_resumes_lost_work(tmp_path, monkeypatch):
+    # A crash between ledger.accept and begin_job leaves the revision current
+    # but jobless; the ledger then dedupes the redelivery, so dispatch must
+    # still reach the lifecycle store for the resume gate to fire.
+    plugin, adapter = _plugin_adapter(tmp_path, monkeypatch)
+    adapter.allow_all = True
+    seen = []
+
+    async def spy(self, event):
+        seen.append(event.get('_ninax_input'))
+
+    monkeypatch.setattr(plugin.native.LineAdapter, '_handle_message_event', spy)
+
+    class _AcceptedLedger:
+        def reserve(self, event_id):
+            return None  # already accepted before the crash
+
+        def accept(self, event_id, owner):
+            raise AssertionError('ledger already accepted this event')
+
+        def release(self, event_id, owner):
+            raise AssertionError('not our reservation')
+
+    adapter._ledger = _AcceptedLedger()
+    event = _event('evt-seen', 1000, 'recover me')
+    event['source'] = {'type': 'user', 'userId': CHAT}
+    asyncio.run(adapter._dispatch_event(event))
+    assert seen and seen[0]['accepted'] and seen[0]['disposition'] == 'ACCEPTED'
+    asyncio.run(adapter._dispatch_event(event))
+    assert seen[1]['disposition'] == 'RESUME_ACCEPTED' and seen[1]['accepted']
+
+
+def test_event_without_webhook_id_keeps_legacy_route(tmp_path, monkeypatch):
+    plugin, adapter = _plugin_adapter(tmp_path, monkeypatch)
+    seen = []
+
+    async def spy(self, event):
+        seen.append(event)
+
+    monkeypatch.setattr(plugin.native.LineAdapter, '_handle_message_event', spy)
+    event = _event('', 1000, 'no id here')
+    event['source'] = {'type': 'user', 'userId': CHAT}
+    asyncio.run(adapter._handle_message_event(event))
+    assert seen == [event] and '_ninax_input' not in seen[0]
+    events_dir = tmp_path / 'hermes-home/line-input-lifecycle/events'
+    assert not events_dir.exists() or not list(events_dir.glob('*.json'))
+
+
+def test_corrupt_state_rebuilds_head_from_receipts(tmp_path):
+    store = _store(tmp_path)
+    root = tmp_path / 'line-input-lifecycle'
+    delivered = _accepted(store, 'evt-1', 1000, 'old')
+    store.finish_job(delivered, 'COMPLETED')
+    store.record_delivery(delivered, 'DELIVERED', 'a' * 64)
+    edited = _accepted(store, 'evt-2', 2000, 'new', kind='messageEdited')
+    state_path = next((root / 'messages').glob('*.json'))
+    state_path.write_text('{not json', encoding='utf-8')
+    # Corruption must not wedge the identity: the head rebuilds from receipts.
+    stale = store.accept(_event('evt-stale', 1500, 'ancient', kind='messageEdited'), CHAT)
+    assert stale['disposition'] == 'STALE_EVENT' and not stale['accepted']
+    assert store.is_current(edited) and not store.is_current(delivered)
+    revived = store.accept(_event('evt-3', 3000, 'newer', kind='messageEdited'), CHAT)
+    assert revived['accepted'] and revived['input_revision'] == 3
+    assert list((root / 'messages').glob('*.corrupt-*')), 'corrupt state stays for audit'
+    # A foreign-schema file still fails closed instead of being rewritten.
+    rebuilt = next((root / 'messages').glob('*.json'))
+    doc = json.loads(rebuilt.read_text())
+    doc['schema_version'] = 99
+    rebuilt.write_text(json.dumps(doc), encoding='utf-8')
+    with pytest.raises(ValueError):
+        store.accept(_event('evt-4', 4000, 'future', kind='messageEdited'), CHAT)
+
+
+def test_postback_error_tap_records_no_answer_delivery(tmp_path, monkeypatch):
+    plugin, adapter = _plugin_adapter(tmp_path, monkeypatch)
+    store = adapter._input_lifecycle
+    binding = _accepted(store, 'evt-1', 1000, 'slow question')
+    adapter._client = _FakeClient()
+    rid = adapter._cache.register_pending(CHAT, delivery_key=(CHAT, 'm-1'))
+    adapter._pending_buttons[(CHAT, 'm-1')] = rid
+    adapter._reviewed_cache[rid] = (CHAT, 'b' * 64, binding)
+    entry = adapter._cache.get(rid)
+    entry.state = plugin.native.State.ERROR
+    entry.payload = 'interrupted'
+    asyncio.run(adapter._handle_postback_event(_postback(rid)))
+    assert adapter._client.calls and adapter._client.calls[0][0] == 'reply'
+    job = json.loads(
+        next((tmp_path / 'hermes-home/line-input-lifecycle/jobs').glob('*.json')).read_text())
+    assert job['delivery']['status'] == 'NOT_ATTEMPTED', \
+        'an error tap must not record the answer payload as delivered'
+
+
+def test_system_bypass_send_allowed_on_stale_binding(tmp_path, monkeypatch):
+    plugin, adapter = _plugin_adapter(tmp_path, monkeypatch)
+    store = adapter._input_lifecycle
+    original = _accepted(store, 'evt-1', 1000, 'old')
+    adapter._client = _FakeClient()
+    token = plugin._INPUT.set(original)
+    try:
+        store.accept(_event('evt-2', 2000, 'edited', kind='messageEdited'), CHAT)
+        result = asyncio.run(adapter.send(CHAT, '⚡ Interrupting previous task'))
+        assert result.success and adapter._client.calls, \
+            'an operational ack is not the stale answer and must still land'
+        blocked = asyncio.run(adapter.send(CHAT, 'the actual stale answer'))
+        assert not blocked.success and blocked.error == 'stale_input_revision'
+    finally:
+        plugin._INPUT.reset(token)
+    job = json.loads(
+        next((tmp_path / 'hermes-home/line-input-lifecycle/jobs').glob('*.1.json')).read_text())
+    assert job['delivery']['status'] == 'REJECTED_STALE'
+
+
+def test_superseded_turn_restores_newer_reply_token(tmp_path, monkeypatch):
+    plugin, adapter = _plugin_adapter(tmp_path, monkeypatch)
+    store = adapter._input_lifecycle
+    binding = store.accept(_event('evt-1', 1000, 'old'), CHAT)
+    assert binding['accepted']
+    key = (CHAT, 'm-1')
+    newer = ('token-new', time.time() + 30)
+    adapter._reply_tokens[key] = newer  # stashed by the newer revision's dispatch
+    adapter._latest_reply_tokens[key] = newer
+
+    async def during(event, session_key):
+        store.accept(_event('evt-2', 2000, 'new', kind='messageEdited'), CHAT)
+        adapter._reply_tokens.pop(key, None)  # native cleanup pops blindly
+
+    monkeypatch.setattr(adapter, '_process_current_message_background', during)
+    event = SimpleNamespace(raw_message={'_ninax_input': binding},
+                            source=SimpleNamespace(chat_id=CHAT), message_id='m-1', text='old')
+    asyncio.run(adapter._process_message_background(event, 'line:test'))
+    assert adapter._reply_tokens.get(key) == newer
+
+    # A current task must not resurrect a token it already consumed.
+    binding2 = store.accept(_event('evt-9', 5000, 'other', message_id='m-9'), CHAT)
+    key2 = (CHAT, 'm-9')
+    own = ('token-own', time.time() + 30)
+    adapter._reply_tokens[key2] = own
+    adapter._latest_reply_tokens[key2] = own
+
+    async def during2(event, session_key):
+        adapter._reply_tokens.pop(key2, None)
+
+    monkeypatch.setattr(adapter, '_process_current_message_background', during2)
+    event2 = SimpleNamespace(raw_message={'_ninax_input': binding2},
+                             source=SimpleNamespace(chat_id=CHAT), message_id='m-9', text='other')
+    asyncio.run(adapter._process_message_background(event2, 'line:test'))
+    assert adapter._reply_tokens.get(key2) is None
+
+
 def test_malformed_and_boolean_revision_fail_closed(tmp_path):
     store = _store(tmp_path)
     with pytest.raises(ValueError):

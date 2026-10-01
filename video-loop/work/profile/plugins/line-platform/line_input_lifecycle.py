@@ -3,6 +3,11 @@
 The LINE platform can redeliver the same webhook and can deliver events out of
 order.  This store makes those facts explicit before any expensive work starts.
 It intentionally stores hashes and identifiers, never message bodies.
+
+One adapter process owns each store root: mutual exclusion is per-process, so
+two gateways sharing a profile home would interleave their read/write cycles.
+Receipts are append-only by design — they are the audit record, so retention
+is a deployment policy, not something the store decides.
 """
 from __future__ import annotations
 
@@ -48,6 +53,15 @@ def _atomic_json(path: Path, value: Dict[str, Any]) -> None:
         handle.flush()
         os.fsync(handle.fileno())
     temporary.replace(path)
+
+
+def _quarantine(path: Path) -> None:
+    """Move an unreadable receipt aside instead of letting it wedge or crash
+    the pipeline. The bytes stay on disk for audit."""
+    try:
+        path.rename(path.with_name(f"{path.name}.corrupt-{int(time.time() * 1000)}"))
+    except OSError:
+        pass
 
 
 def _message_content(message: Dict[str, Any], event_type: str) -> Dict[str, Any]:
@@ -131,22 +145,30 @@ class InputLifecycle:
         state_path = self._state_path(identity)
 
         with self._lock:
-            existing_event = _strict_read(event_path)
+            try:
+                existing_event = _strict_read(event_path)
+            except (OSError, ValueError, json.JSONDecodeError):
+                logger.error("LINE: quarantining unreadable event receipt %s", event_path.name)
+                _quarantine(event_path)
+                existing_event = {}
             if existing_event:
-                old_binding = existing_event.get("binding")
-                if not isinstance(old_binding, dict):
-                    raise ValueError("invalid LINE event receipt")
-                old_value = self._binding_fields(old_binding)
-                job = _strict_read(self._job_path(old_value["input_id"], old_value["input_revision"]))
+                try:
+                    old_value = self._binding_fields(existing_event.get("binding"))
+                except (TypeError, ValueError):
+                    logger.error("LINE: quarantining malformed event receipt %s", event_path.name)
+                    _quarantine(event_path)
+                    existing_event = {}
+            if existing_event:
+                job = self._read_job(self._job_path(old_value["input_id"], old_value["input_revision"]))
                 # The recorded disposition is history, not the resume gate: any
                 # receipt whose binding still resolves to the current head may
                 # restart work while its job receipt is absent — including one
                 # torn between the resume decision and begin_job.
                 resume = self.is_current(old_value) and not job
-                return {**old_binding, "disposition": "RESUME_ACCEPTED" if resume else "DUPLICATE_EVENT",
+                return {**old_value, "disposition": "RESUME_ACCEPTED" if resume else "DUPLICATE_EVENT",
                         "accepted": resume}
 
-            state = _strict_read(state_path)
+            state = self._read_state(state_path, identity)
             revisions = list(state.get("revisions", []))
             disposition = "ACCEPTED"
             supersedes = None
@@ -156,19 +178,13 @@ class InputLifecycle:
                 current_timestamp = state.get("current_event_timestamp_ms")
                 current_hash = state.get("current_content_sha256")
                 revision = state.get("current_revision")
-                if (isinstance(current_timestamp, bool) or not isinstance(current_timestamp, int)
-                        or not isinstance(current_hash, str) or isinstance(revision, bool)
-                        or not isinstance(revision, int)
-                        or not revisions or not isinstance(revisions[-1], dict)
-                        or revisions[-1].get("revision") != revision):
-                    raise ValueError("invalid LINE lifecycle state")
                 if content_sha256 == current_hash:
                     # The state commit intentionally precedes the event receipt.
                     # If the process died between those writes, a later event
                     # must resume this revision instead of being lost forever —
                     # regardless of which event id owns the bookkeeping, so a
                     # duplicate's timestamp takeover cannot strand the work.
-                    job = _strict_read(self._job_path(identity, revision))
+                    job = self._read_job(self._job_path(identity, revision))
                     resume = not job
                     disposition = "RESUME_ACCEPTED" if resume else "DUPLICATE_CONTENT"
                     # Preserve the greatest observed occurrence time so a later
@@ -240,10 +256,94 @@ class InputLifecycle:
 
     def _supersede_job(self, identity: str, revision: int, newer_revision: int) -> None:
         path = self._job_path(identity, revision)
-        job = _strict_read(path)
-        if job and job.get("status") not in TERMINAL_JOB_STATES:
+        job = self._read_job(path)
+        if job and job.get("status") not in TERMINAL_JOB_STATES | {"UNREADABLE"}:
             _atomic_json(path, {**job, "status": "SUPERSEDED", "superseded_by_revision": newer_revision,
                                 "finished_at": time.time()})
+
+    def _read_state(self, path: Path, identity: str) -> Dict[str, Any]:
+        """Load the revision head; heal unreadable v1 state from receipts.
+
+        A file written by a newer schema still raises — an old binary must not
+        rewrite state it cannot interpret. Unreadable or invalid v1 state is
+        quarantined and the head rebuilt from the identity's surviving job and
+        event receipts, so a corrupt file neither wedges the message forever
+        nor lets a stale event pose as the latest input.
+        """
+        try:
+            state = _strict_read(path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            logger.error("LINE: quarantining unreadable lifecycle state %s", path.name)
+            _quarantine(path)
+            return self._rebuild_state(identity, path)
+        if state and state.get("schema_version") != SCHEMA_VERSION:
+            raise ValueError("unsupported LINE lifecycle schema")
+        if state and not self._state_is_valid(state):
+            logger.error("LINE: quarantining invalid lifecycle state %s", path.name)
+            _quarantine(path)
+            return self._rebuild_state(identity, path)
+        return state
+
+    @staticmethod
+    def _state_is_valid(state: Dict[str, Any]) -> bool:
+        current_timestamp = state.get("current_event_timestamp_ms")
+        revision = state.get("current_revision")
+        revisions = state.get("revisions")
+        return (isinstance(current_timestamp, int) and not isinstance(current_timestamp, bool)
+                and isinstance(state.get("current_content_sha256"), str)
+                and isinstance(revision, int) and not isinstance(revision, bool)
+                and isinstance(revisions, list) and bool(revisions)
+                and isinstance(revisions[-1], dict)
+                and revisions[-1].get("revision") == revision)
+
+    def _rebuild_state(self, identity: str, state_path: Path) -> Dict[str, Any]:
+        """Reconstruct the head from surviving receipts after state loss.
+
+        Job receipts and event receipts both carry the full input binding, so
+        the newest accepted revision stays the head: older content remains
+        stale instead of reviving, and new input supersedes normally.
+        """
+        head = None
+        candidates = sorted((self.root / "jobs").glob(f"{identity}.*.json"))
+        candidates += sorted((self.root / "events").glob("*.json"))
+        for path in candidates:
+            try:
+                receipt = _strict_read(path)
+                value = self._binding_fields(receipt.get("binding"))
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                continue
+            if value["input_id"] != identity:
+                continue
+            if head is None or value["input_revision"] > head["current_revision"]:
+                head = {
+                    "schema_version": SCHEMA_VERSION,
+                    "input_id": identity,
+                    "chat_id": value["chat_id"],
+                    "message_id": value["message_id"],
+                    "current_revision": value["input_revision"],
+                    "current_content_sha256": value["input_sha256"],
+                    "current_event_timestamp_ms": value["event_timestamp_ms"],
+                    "current_webhook_event_id": value["webhook_event_id"],
+                    "revisions": [{"revision": value["input_revision"],
+                                   "content_sha256": value["input_sha256"],
+                                   "event_timestamp_ms": value["event_timestamp_ms"],
+                                   "webhook_event_id": value["webhook_event_id"],
+                                   "event_type": "recovered", "status": "CURRENT"}],
+                    "recovered_from_receipts": True,
+                }
+        if head is not None:
+            _atomic_json(state_path, head)
+        return head or {}
+
+    def _read_job(self, path: Path) -> Dict[str, Any]:
+        """Tolerant job read for admission. A corrupt receipt is kept and
+        treated as existing-but-unknown: re-running work it may already have
+        paid for is the worse failure."""
+        try:
+            return _strict_read(path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            logger.error("LINE: unreadable job receipt %s treated as present", path.name)
+            return {"schema_version": SCHEMA_VERSION, "status": "UNREADABLE"}
 
     @staticmethod
     def _binding_fields(binding: Dict[str, Any]) -> Dict[str, Any]:
@@ -252,9 +352,16 @@ class InputLifecycle:
         keys = ("schema_version", "input_id", "chat_id", "message_id", "input_revision", "input_sha256",
                 "event_timestamp_ms", "webhook_event_id")
         value = {key: binding.get(key) for key in keys}
-        if (value["schema_version"] != SCHEMA_VERSION or not isinstance(value["input_id"], str)
+        if (value["schema_version"] != SCHEMA_VERSION
+                or not isinstance(value["input_id"], str) or not value["input_id"]
+                or not isinstance(value["chat_id"], str) or not value["chat_id"]
+                or not isinstance(value["message_id"], str) or not value["message_id"]
+                or not isinstance(value["webhook_event_id"], str) or not value["webhook_event_id"]
                 or isinstance(value["input_revision"], bool)
-                or not isinstance(value["input_revision"], int) or not isinstance(value["input_sha256"], str)):
+                or not isinstance(value["input_revision"], int)
+                or not isinstance(value["input_sha256"], str) or not value["input_sha256"]
+                or isinstance(value["event_timestamp_ms"], bool)
+                or not isinstance(value["event_timestamp_ms"], int)):
             raise ValueError("invalid LINE input binding")
         return value
 

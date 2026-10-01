@@ -48,6 +48,7 @@ class VideoLineAdapter(native.LineAdapter):
         self._input_lifecycle = InputLifecycle(self._video_home/'line-input-lifecycle')
         self._active_videos = {}
         self._reviewed_cache = {}
+        self._latest_reply_tokens = {}
 
     def _session_path(self, session_key):
         return self._video_state/(digest([str(self._video_home),session_key])+'.json')
@@ -69,9 +70,12 @@ class VideoLineAdapter(native.LineAdapter):
                 'recall':saved.get('result',{}) if RECALL.fullmatch(message.strip(' 。！!')) else {}}
 
     async def _dispatch_event(self, event):
-        # Native dispatch predates the messageEdited event; route it through the
-        # same authorization/ledger envelope as a message, then the revision gate.
-        if not isinstance(event, dict) or event.get('type') != 'messageEdited':
+        # Native dispatch predates the messageEdited event; text-input events
+        # route through the same authorization/ledger envelope, then the
+        # revision gate. A ledger-level duplicate still reaches the lifecycle
+        # store — the ledger cannot see torn job receipts, so the durable
+        # input store decides whether lost work may resume.
+        if not isinstance(event, dict) or event.get('type') not in {'message', 'messageEdited'}:
             return await super()._dispatch_event(event)
         source = event.get('source') or {}
         if self._bot_user_id and source.get('userId', '') == self._bot_user_id:
@@ -84,8 +88,6 @@ class VideoLineAdapter(native.LineAdapter):
             raise RuntimeError('LINE inbound ledger is not connected')
         event_id = event.get('webhookEventId', '') or ''
         owner = self._ledger.reserve(event_id) if event_id else None
-        if event_id and owner is None:
-            return
         try:
             await self._handle_message_event(event)
             if owner is not None:
@@ -101,6 +103,9 @@ class VideoLineAdapter(native.LineAdapter):
     async def _handle_message_event(self, event):
         # A durable input decision is the boundary between "webhook received" and
         # "work started": duplicates, stale and conflicting revisions stop here.
+        if not event.get('webhookEventId'):
+            # Events without an ID cannot be deduplicated; keep the legacy route.
+            return await super()._handle_message_event(event)
         chat_id, _ = native._resolve_chat(event.get('source') or {})
         try:
             decision = self._input_lifecycle.accept(event, chat_id)
@@ -110,11 +115,18 @@ class VideoLineAdapter(native.LineAdapter):
             return
         if not decision['accepted']:
             return
-        previous = self._active_videos.get((chat_id, decision['message_id']))
+        key = (chat_id, decision['message_id'])
+        previous = self._active_videos.get(key)
         handle = (previous or {}).get('run_handle')
         if handle and decision['input_revision'] > (previous.get('input_binding') or {}).get('input_revision', 0):
             handle.interrupt()
         await super()._handle_message_event({**event, '_ninax_input': decision})
+        stashed = self._reply_tokens.get(key)
+        if stashed:
+            now = time.time()
+            self._latest_reply_tokens = {k: v for k, v in self._latest_reply_tokens.items()
+                                         if v[1] > now}
+            self._latest_reply_tokens[key] = stashed
 
     async def _process_message_background(self, event, session_key):
         raw = event.raw_message if isinstance(getattr(event, 'raw_message', None), dict) else {}
@@ -144,6 +156,13 @@ class VideoLineAdapter(native.LineAdapter):
             except (OSError, ValueError, json.JSONDecodeError):
                 native.logger.error('LINE: input job close failed for %s',
                                     input_binding.get('webhook_event_id'))
+            # A superseded task's cleanup must not steal the reply token a
+            # newer revision just stashed under the same (chat, message) key.
+            key = (event.source.chat_id, event.message_id)
+            latest = self._latest_reply_tokens.get(key)
+            if (latest and self._reply_tokens.get(key) != latest
+                    and not self._input_lifecycle.is_current(input_binding)):
+                self._reply_tokens[key] = latest
             _INPUT.reset(input_token)
 
     async def _process_current_message_background(self, event, session_key):
@@ -245,7 +264,10 @@ class VideoLineAdapter(native.LineAdapter):
 
     async def send(self, chat_id, content, reply_to=None, metadata=None):
         input_binding = _INPUT.get()
-        if input_binding and not self._input_lifecycle.is_current(input_binding):
+        # Operational acks (interrupt/queue/steer) are not the stale answer —
+        # they must still reach the user when an edit supersedes mid-turn.
+        if (input_binding and not native._is_system_bypass(content)
+                and not self._input_lifecycle.is_current(input_binding)):
             self._record_delivery_attempt(input_binding,'REJECTED_STALE',
                                           digest(native._text_messages(content)))
             return SendResult(success=False,error='stale_input_revision')
@@ -261,13 +283,15 @@ class VideoLineAdapter(native.LineAdapter):
         if deferred:
             self._reviewed_cache[rid] = (chat_id, digest(native._text_messages(content)), input_binding)
         payload_sha256 = digest(native._text_messages(content))
-        if input_binding and not deferred:
+        # Delivery receipts track the bound answer, not operational acks.
+        if input_binding and not deferred and not native._is_system_bypass(content):
             try:
                 self._input_lifecycle.record_delivery(input_binding,'UNKNOWN',payload_sha256)
             except (OSError,ValueError,json.JSONDecodeError):
                 return SendResult(success=False,error='input_delivery_receipt_failed')
         result = await super().send(chat_id, content, reply_to=reply_to, metadata=metadata)
-        if input_binding and not deferred and result.success:
+        if (input_binding and not deferred and not native._is_system_bypass(content)
+                and result.success):
             self._record_delivery_attempt(input_binding,'DELIVERED',payload_sha256)
         return result
 
@@ -285,7 +309,8 @@ class VideoLineAdapter(native.LineAdapter):
             return
         reviewed = self._reviewed_cache.get(rid)
         input_binding = reviewed[2] if reviewed and len(reviewed) > 2 else None
-        if entry.state is native.State.READY:
+        was_ready = entry.state is native.State.READY
+        if was_ready:
             if (not reviewed
                     or reviewed[:2] != (chat_id,digest(native._text_messages(str(entry.payload or ''))))
                     or (input_binding is not None
@@ -300,7 +325,9 @@ class VideoLineAdapter(native.LineAdapter):
                 except (OSError,ValueError,json.JSONDecodeError):
                     return
         result = await super()._handle_postback_event(event)
-        if input_binding is not None and entry.state is native.State.DELIVERED:
+        # Only a READY tap delivers the cached answer; an ERROR tap delivers the
+        # error text and must not record the answer's hash as delivered.
+        if was_ready and input_binding is not None and entry.state is native.State.DELIVERED:
             self._record_delivery_attempt(input_binding,'DELIVERED',reviewed[1])
             self._reviewed_cache.pop(rid,None)
         return result
