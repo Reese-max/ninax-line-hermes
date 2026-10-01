@@ -6,6 +6,8 @@ It intentionally stores hashes and identifiers, never message bodies.
 
 One adapter process owns each store root: mutual exclusion is per-process, so
 two gateways sharing a profile home would interleave their read/write cycles.
+Job receipts name the store that wrote them, so a second adapter over the same
+root reconciles only genuinely orphaned work.
 Receipts are append-only by design — they are the audit record, so retention
 is a deployment policy, not something the store decides.
 """
@@ -32,18 +34,27 @@ TERMINAL_JOB_STATES = frozenset({"COMPLETED", "FAILED", "INTERRUPTED", "SUPERSED
 # head must be resolved by a key that does not depend on arrival order.
 _EVENT_RANK = {"message": 0, "messageEdited": 1}
 
+# Store instances alive in this process. A STARTED job whose owner is still here
+# is running work, not work orphaned by a restart.
+_LIVE_OWNERS: set = set()
 
-def _outranks(event_type: str, content_sha256: str, current_event_type: Any, current_hash: Any) -> bool:
-    """Deterministic, arrival-independent precedence for equal-timestamp events.
 
-    A state file written before this field existed has no recorded type, so its
-    head ranks below every known event type and the content hash decides.
+def _same_millisecond_disposition(event_type: str, current_event_type: Any) -> str:
+    """Resolve two events carrying the same millisecond.
+
+    LINE orders neither, so the only durable signal is the event kind: an edit
+    is by definition later than the plain message it revised, so a plain
+    ``message`` can never displace an edit at the same millisecond. Within one
+    kind the events are genuinely indistinguishable, and discarding the newest
+    input would silently answer superseded content, so the later arrival wins —
+    deterministic for this store, whose single owning adapter process observes
+    one arrival order. A head rebuilt from receipts has no recorded type and is
+    treated as an edit, so recovery cannot be undone by a late original.
     """
-    if not isinstance(current_hash, str):
-        return True
-    return ((_EVENT_RANK.get(event_type, -1), content_sha256)
-            > (_EVENT_RANK.get(current_event_type, -1) if isinstance(current_event_type, str) else -1,
-               current_hash))
+    if isinstance(current_event_type, str) and current_event_type in _EVENT_RANK:
+        if _EVENT_RANK.get(event_type, 0) < _EVENT_RANK[current_event_type]:
+            return "STALE_EVENT"
+    return "ACCEPTED"
 
 
 def _digest(value: Any) -> str:
@@ -114,27 +125,41 @@ def _message_content(message: Dict[str, Any], event_type: str) -> Dict[str, Any]
 class InputLifecycle:
     """Persist input decisions and cost/delivery receipts for one adapter process."""
 
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, *, owner: str = ""):
         self.root = Path(root)
         self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
         self._lock = threading.RLock()
-        self._reconcile_restarted_jobs()
+        self._owner = owner or f"{os.getpid()}-{id(self):x}"
+        _LIVE_OWNERS.add(self._owner)
+        self._reconcile_restarted_jobs(self._owner)
 
-    def _reconcile_restarted_jobs(self) -> None:
+    def _reconcile_restarted_jobs(self, owner: str = "") -> None:
         """A ``STARTED`` job surviving process restart is dead work: mark it
         ``INTERRUPTED`` so receipts stay honest. It is never restarted — the
         event receipt already dedupes redelivery, and re-running could repeat
-        external side effects that cannot be proven un-executed."""
+        external side effects that cannot be proven un-executed.
+
+        ``owner`` names the adapter instance that owns this store in this
+        process. Receipts written by a store that is still live here are left
+        alone, so a second adapter sharing the root (the gateway multiplexes
+        profiles) cannot freeze the first one's in-flight jobs by re-running
+        this sweep."""
         for path in sorted((self.root / "jobs").glob("*.json")):
             try:
                 job = _strict_read(path)
             except (OSError, ValueError, json.JSONDecodeError):
                 logger.warning("LINE: skipping unreadable lifecycle job receipt %s", path.name)
                 continue
-            if job.get("status") == "STARTED":
-                _atomic_json(path, {**job, "status": "INTERRUPTED",
-                                    "interrupted_reason": "process_restart",
-                                    "finished_at": time.time()})
+            if job.get("status") != "STARTED":
+                continue
+            if job.get("owner") in _LIVE_OWNERS:
+                # Written by a store still live in this process: the work is
+                # running, not dead. Re-running the sweep (a second adapter over
+                # the same root) must not freeze its cost receipt.
+                continue
+            _atomic_json(path, {**job, "status": "INTERRUPTED",
+                                "interrupted_reason": "process_restart",
+                                "finished_at": time.time()})
 
     @staticmethod
     def _identity(chat_id: str, message_id: str) -> str:
@@ -226,16 +251,10 @@ class InputLifecycle:
                         _atomic_json(state_path, state)
                 elif timestamp < current_timestamp:
                     disposition = "STALE_EVENT"
-                elif timestamp == current_timestamp and not _outranks(event["type"], content_sha256,
-                                                                     state.get("current_event_type"),
-                                                                     current_hash):
-                    # Equal timestamps are indistinguishable by the platform
-                    # contract, so arrival order must not decide the head: a
-                    # late event would otherwise roll the current revision back
-                    # to older content. Order them by a deterministic,
-                    # arrival-independent key (edit events outrank plain
-                    # messages, then the content hash), which every replica and
-                    # every replay resolves identically.
+                elif timestamp == current_timestamp and _same_millisecond_disposition(
+                        event["type"], state.get("current_event_type")) == "STALE_EVENT":
+                    # An original message event can never displace the edit that
+                    # superseded it, however late it arrives.
                     disposition = "STALE_EVENT"
                 else:
                     supersedes = revision
@@ -310,9 +329,11 @@ class InputLifecycle:
         input. A first-ever message has no receipts and stays revision 1.
         """
         if not path.exists():
-            # A brand-new identity has no job receipt and needs no recovery scan;
-            # only a lost file over surviving work has to rebuild.
-            if not list((self.root / "jobs").glob(f"{identity}.*.json")):
+            # A brand-new identity has no receipt anywhere and needs no recovery
+            # scan. Only a lost file over surviving work has to rebuild, and
+            # event receipts count as surviving work: an admitted revision that
+            # never reached a job receipt still owns its revision number.
+            if not self._identity_has_receipts(identity):
                 return {}
             logger.error("LINE: rebuilding missing lifecycle state %s from receipts", path.name)
             return self._rebuild_state(identity, path)
@@ -329,6 +350,17 @@ class InputLifecycle:
             _quarantine(path)
             return self._rebuild_state(identity, path)
         return state
+
+    def _identity_has_receipts(self, identity: str) -> bool:
+        if list((self.root / "jobs").glob(f"{identity}.*.json")):
+            return True
+        for path in (self.root / "events").glob("*.json"):
+            try:
+                if self._binding_fields(_strict_read(path).get("binding"))["input_id"] == identity:
+                    return True
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                continue
+        return False
 
     @staticmethod
     def _state_is_valid(state: Dict[str, Any]) -> bool:
@@ -348,19 +380,34 @@ class InputLifecycle:
         Job receipts and event receipts both carry the full input binding, so
         the newest accepted revision stays the head: older content remains
         stale instead of reviving, and new input supersedes normally.
+
+        Only receipts that actually took the head are eligible. A rejected
+        event (stale, duplicate content, duplicate id) is written with the
+        head's revision number but the incoming event's content hash, so
+        counting it would install content the platform never made current.
         """
         head = None
-        candidates = sorted((self.root / "jobs").glob(f"{identity}.*.json"))
-        candidates += sorted((self.root / "events").glob("*.json"))
+        head_key = None
+        # Event receipts come first: they are the only ones carrying the event
+        # type, so they win an otherwise exact tie against a job receipt.
+        candidates = sorted((self.root / "events").glob("*.json"))
+        candidates += sorted((self.root / "jobs").glob(f"{identity}.*.json"))
         for path in candidates:
             try:
                 receipt = _strict_read(path)
+                if not self._took_head(receipt, path):
+                    continue
                 value = self._binding_fields(receipt.get("binding"))
             except (OSError, ValueError, TypeError, json.JSONDecodeError):
                 continue
             if value["input_id"] != identity:
                 continue
-            if head is None or value["input_revision"] > head["current_revision"]:
+            event_type = (receipt.get("event_type")
+                          if receipt.get("event_type") in _EVENT_RANK else None)
+            key = (value["input_revision"], value["event_timestamp_ms"],
+                   _EVENT_RANK.get(event_type, -1), value["input_sha256"])
+            if head_key is None or key > head_key:
+                head_key = key
                 head = {
                     "schema_version": SCHEMA_VERSION,
                     "input_id": identity,
@@ -369,21 +416,27 @@ class InputLifecycle:
                     "current_revision": value["input_revision"],
                     "current_content_sha256": value["input_sha256"],
                     "current_event_timestamp_ms": value["event_timestamp_ms"],
-                    "current_event_type": (receipt.get("event_type")
-                                           if receipt.get("event_type") in _EVENT_RANK else "recovered"),
+                    "current_event_type": event_type or "recovered",
                     "current_webhook_event_id": value["webhook_event_id"],
                     "revisions": [{"revision": value["input_revision"],
                                    "content_sha256": value["input_sha256"],
                                    "event_timestamp_ms": value["event_timestamp_ms"],
                                    "webhook_event_id": value["webhook_event_id"],
-                                   "event_type": (receipt.get("event_type")
-                                                  if receipt.get("event_type") in _EVENT_RANK else "recovered"),
+                                   "event_type": event_type or "recovered",
                                    "status": "CURRENT"}],
                     "recovered_from_receipts": True,
                 }
         if head is not None:
             _atomic_json(state_path, head)
         return head or {}
+
+    @staticmethod
+    def _took_head(receipt: Dict[str, Any], path: Path) -> bool:
+        """A job receipt only exists for a revision that took the head; an event
+        receipt qualifies only when it was admitted for expensive work."""
+        if path.parent.name == "jobs":
+            return True
+        return receipt.get("eligible_for_expensive_work") is True
 
     def _read_job(self, path: Path) -> Dict[str, Any]:
         """Tolerant job read for admission. A corrupt receipt is kept and
@@ -434,6 +487,7 @@ class InputLifecycle:
             if not self.is_current(value) or _strict_read(path):
                 return False
             _atomic_json(path, {"schema_version": SCHEMA_VERSION, "binding": value, "status": "STARTED",
+                                "owner": self._owner,
                                 "cost_attribution_key": f"{value['input_id']}:{value['input_revision']}",
                                 "started_at": time.time(), "delivery": {"status": "NOT_ATTEMPTED"}})
             return True

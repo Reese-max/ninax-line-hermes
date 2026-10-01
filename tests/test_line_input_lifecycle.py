@@ -25,6 +25,13 @@ def _module():
     return line_input_lifecycle
 
 
+def _restarted(root):
+    """Reload the module so the live-owner registry is empty, which is what a
+    genuinely new gateway process sees."""
+    module = importlib.reload(_module())
+    return module.InputLifecycle(root)
+
+
 def _store(tmp_path):
     return _module().InputLifecycle(tmp_path / 'line-input-lifecycle')
 
@@ -139,8 +146,8 @@ def test_out_of_order_late_event_cannot_overwrite_head(tmp_path):
 def test_same_content_dedupe_and_equal_timestamp_tiebreak(tmp_path):
     store = _store(tmp_path)
     edited = _accepted(store, 'evt-1', 1000, 'new')
-    # Edit events may reuse the original message timestamp; distinct content at
-    # an equal timestamp supersedes by arrival order instead of wedging.
+    # An edit outranks the original message at the same millisecond, so a genuine
+    # edit reusing the message timestamp supersedes instead of wedging.
     edited_again = store.accept(_event('evt-2', 1000, 'edited again', kind='messageEdited'), CHAT)
     assert edited_again['accepted'] and edited_again['input_revision'] == 2
     assert not store.is_current(edited) and store.is_current(edited_again)
@@ -211,7 +218,7 @@ def test_restart_recovers_dedupe_revision_and_delivery_state(tmp_path):
     store.finish_job(edited, 'COMPLETED')
     store.record_delivery(edited, 'DELIVERED', 'a' * 64)
 
-    restarted = _module().InputLifecycle(root)
+    restarted = _restarted(root)
     assert restarted.is_current(edited) and not restarted.is_current(original)
     duplicate = restarted.accept(_event('evt-2', 2000, 'new', kind='messageEdited'), CHAT)
     assert duplicate['disposition'] == 'DUPLICATE_EVENT' and not duplicate['accepted']
@@ -268,7 +275,7 @@ def test_restart_marks_orphaned_started_job_interrupted(tmp_path):
     root = tmp_path / 'line-input-lifecycle'
     store = _store(tmp_path)
     _accepted(store, 'evt-1', 1000, 'crash me')
-    restarted = _module().InputLifecycle(root)
+    restarted = _restarted(root)
     job = json.loads(next((root / 'jobs').glob('*.json')).read_text())
     assert job['status'] == 'INTERRUPTED' and job['interrupted_reason'] == 'process_restart'
     duplicate = restarted.accept(_event('evt-1', 1000, 'crash me', redelivery=True), CHAT)
@@ -602,34 +609,34 @@ def test_superseded_input_drops_before_background_work(tmp_path, monkeypatch):
     assert result is None and reached == [], 'superseded input must not start a turn'
 
 
-def test_equal_timestamp_head_is_arrival_order_independent(tmp_path):
-    # LINE gives no total order inside one millisecond. Whichever equal-timestamp
-    # event arrives last must not decide the head, or a late event rolls the
-    # current revision back to older content.
-    def head_after(events):
-        root = tmp_path / ('lc-' + '-'.join(f'{eid}{text}' for eid, text, _ in events))
-        store = _module().InputLifecycle(root)
-        current = None
-        for event_id, text, kind in events:
-            decision = store.accept(_event(event_id, 3000, text, kind=kind), CHAT)
-            if decision['accepted']:
-                current = decision
-        return current, store.is_current(current)
+def test_equal_timestamp_original_message_never_displaces_an_edit(tmp_path):
+    # LINE orders neither event inside one millisecond, but an original message
+    # event is by definition older than the edit that superseded it, so a late
+    # redelivery must not roll the head back to the pre-edit text.
+    store = _store(tmp_path)
+    _accepted(store, 'evt-1', 1000, 'original question')
+    edited = _accepted(store, 'evt-2', 1000, 'edited question', kind='messageEdited')
+    assert edited['input_revision'] == 2, 'an edit reusing the message timestamp must win'
+    for event_id in ('evt-3', 'evt-4'):
+        late = store.accept(_event(event_id, 1000, 'original question'), CHAT)
+        assert late['disposition'] == 'STALE_EVENT' and not late['accepted'], (event_id, late)
+    assert store.is_current(edited) and not store.is_current(
+        store.accept(_event('evt-5', 1000, 'original question'), CHAT))
 
-    original = [('evt-1', 'first', 'message'), ('evt-2', 'second', 'messageEdited'),
-                ('evt-3', 'current', 'messageEdited')]
-    late = original + [('evt-late', 'first', 'message')]
-    forward, forward_current = head_after(original)
-    backward, backward_current = head_after(list(reversed(late)))
-    assert forward_current and backward_current
-    assert forward['input_sha256'] == backward['input_sha256'], \
-        'a late equal-timestamp event changed the head only because it arrived last'
 
-    # A plain message event is never newer than an edit at the same timestamp.
-    store = _store(tmp_path / 'message-vs-edit')
-    _accepted(store, 'evt-a', 1000, 'original')
-    _accepted(store, 'evt-b', 1000, 'edited', kind='messageEdited')
-    assert store.accept(_event('evt-c', 1000, 'original'), CHAT)['disposition'] == 'STALE_EVENT'
+def test_repeated_edits_at_one_millisecond_keep_the_newest(tmp_path):
+    # Two edits in the same millisecond are genuinely indistinguishable, so the
+    # later arrival wins: dropping the newest input would answer superseded text.
+    store = _store(tmp_path)
+    _accepted(store, 'evt-1', 1000, 'first edit', kind='messageEdited')
+    second = _accepted(store, 'evt-2', 1000, 'second edit', kind='messageEdited')
+    third = _accepted(store, 'evt-3', 1000, 'third edit', kind='messageEdited')
+    assert third['input_revision'] == second['input_revision'] + 1
+    assert store.is_current(third) and not store.is_current(second)
+    job = json.loads(
+        next((tmp_path / 'line-input-lifecycle/jobs').glob(f"*.{third['input_revision']}.json")).read_text())
+    assert job['binding']['input_sha256'] == third['input_sha256'], \
+        'work runs against the newest content, not the superseded text'
 
 
 def test_equal_timestamp_edit_supersedes_without_wedging(tmp_path):
@@ -639,6 +646,93 @@ def test_equal_timestamp_edit_supersedes_without_wedging(tmp_path):
     assert edited['accepted'] and edited['input_revision'] == 2, \
         'a genuine edit reusing the message timestamp must not be dropped'
     assert not store.is_current(original) and store.is_current(edited)
+
+
+def _rebuild(tmp_path, trigger_ts, trigger_text='older trigger', kind='messageEdited'):
+    """Corrupt the state file and force the lazy rebuild with a rejected event,
+    so the recovered head itself is observable instead of a later revision."""
+    root = tmp_path / 'line-input-lifecycle'
+    next((root / 'messages').glob('*.json')).write_text('{corrupt', encoding='utf-8')
+    store = _module().InputLifecycle(root)
+    assert store.accept(_event('evt-rebuild', trigger_ts, trigger_text, kind=kind), CHAT)[
+        'disposition'] == 'STALE_EVENT'
+    return store, json.loads(next(p for p in (root / 'messages').glob('*.json')
+                                  if '.corrupt-' not in p.name).read_text())
+
+
+def test_second_adapter_does_not_freeze_a_live_job(tmp_path):
+    # The gateway multiplexes LINE profiles in one process, and the store root is
+    # shared: a second adapter's restart sweep must not mark the first adapter's
+    # in-flight job INTERRUPTED, or its cost receipt is frozen mid-flight.
+    root = tmp_path / 'line-input-lifecycle'
+    store = _module().InputLifecycle(root, owner='adapter-one')
+    binding = _accepted(store, 'evt-1', 1000, 'in flight')
+    assert json.loads(
+        next((root / 'jobs').glob('*.1.json')).read_text())['owner'] == 'adapter-one'
+    second = _module().InputLifecycle(root, owner='adapter-two')
+    job = json.loads(next((root / 'jobs').glob('*.1.json')).read_text())
+    assert job['status'] == 'STARTED', 'a live job was frozen by another adapter sweep'
+    second.finish_job(binding, 'COMPLETED')
+    assert json.loads(
+        next((root / 'jobs').glob('*.1.json')).read_text())['status'] == 'COMPLETED'
+
+    # A genuinely dead job (a different owner, or none recorded) still reconciles.
+    dead = _module().InputLifecycle(root, owner='adapter-three')
+    other = _accepted(dead, 'evt-2', 2000, 'next', kind='messageEdited')
+    path = next((root / 'jobs').glob(f"*.{other['input_revision']}.json"))
+    receipt = json.loads(path.read_text())
+    path.write_text(json.dumps({**receipt, 'status': 'STARTED', 'owner': 'dead-process'}), encoding='utf-8')
+    _module().InputLifecycle(root, owner='adapter-four')
+    assert json.loads(path.read_text())['status'] == 'INTERRUPTED'
+
+
+def test_rebuild_head_ignores_rejected_event_receipts(tmp_path):
+    root = tmp_path / 'line-input-lifecycle'
+    store = _store(tmp_path)
+    original = _accepted(store, 'evt-1', 1000, 'original')
+    store.finish_job(original, 'COMPLETED')
+    head = _accepted(store, 'evt-2', 2000, 'EDITED-NEWEST', kind='messageEdited')
+    # A stale event is receipted with the head's revision number but its own
+    # content hash, so counting it would install content the head superseded.
+    stale = store.accept(_event('evt-stale', 1500, 'STALE-OLD', kind='messageEdited'), CHAT)
+    assert stale['disposition'] == 'STALE_EVENT' and stale['input_revision'] == head['input_revision']
+    restarted, rebuilt = _rebuild(tmp_path, 1500)
+    assert rebuilt['current_content_sha256'] == head['input_sha256'], \
+        'the rebuild installed content from a rejected event receipt'
+    assert restarted.is_current(head) and not restarted.is_current(stale)
+
+
+def test_missing_state_over_event_only_receipts_keeps_revision_numbers(tmp_path):
+    root = tmp_path / 'line-input-lifecycle'
+    store = _store(tmp_path)
+    # An admitted revision that never reached a job receipt still owns its
+    # revision number; a lost state file must not hand it out again.
+    first = store.accept(_event('evt-1', 1000, 'first'), CHAT)
+    second = store.accept(_event('evt-2', 2000, 'second', kind='messageEdited'), CHAT)
+    assert not list((root / 'jobs').glob('*.json'))
+    next((root / 'messages').glob('*.json')).unlink()
+    restarted = _module().InputLifecycle(root)
+    stale = restarted.accept(_event('evt-3', 1500, 'older', kind='messageEdited'), CHAT)
+    assert stale['disposition'] == 'STALE_EVENT', 'a lost state file must not restart at revision 1'
+    assert restarted.is_current(second) and not restarted.is_current(first)
+    resumed = restarted.accept(_event('evt-2', 2000, 'second', kind='messageEdited'), CHAT)
+    assert resumed['disposition'] == 'RESUME_ACCEPTED' and resumed['input_revision'] == 2
+    assert restarted.begin_job(resumed)
+    assert not list((root / 'jobs').glob('*.1.json')), 'the new work must not alias an older receipt'
+
+
+def test_rebuild_head_is_not_undone_by_a_late_original_message(tmp_path):
+    store = _store(tmp_path)
+    original = _accepted(store, 'evt-1', 1000, 'original')
+    store.finish_job(original, 'COMPLETED')
+    _accepted(store, 'evt-2', 2000, 'edited', kind='messageEdited')
+    restarted, rebuilt = _rebuild(tmp_path, 1500)
+    assert rebuilt['current_event_type'] == 'messageEdited'
+    late = restarted.accept(_event('evt-4', rebuilt['current_event_timestamp_ms'], 'original'), CHAT)
+    assert late['disposition'] == 'STALE_EVENT' and not late['accepted'], \
+        'recovery must not be undone by a late original message at the head timestamp'
+    current = restarted.accept(_event('evt-5', 9000, 'newest', kind='messageEdited'), CHAT)
+    assert current['accepted'] and current['input_revision'] == 3
 
 
 def test_missing_state_file_rebuilds_head_from_receipts(tmp_path):
@@ -651,7 +745,7 @@ def test_missing_state_file_rebuilds_head_from_receipts(tmp_path):
     # Losing the state file must not pose as a brand-new message: the surviving
     # job receipt would otherwise refuse every later revision forever. The head
     # rebuilds lazily on the next admission decision, failing closed until then.
-    restarted = _module().InputLifecycle(root)
+    restarted = _restarted(root)
     assert not restarted.is_current(edited)
     stale = restarted.accept(_event('evt-3', 1500, 'ancient', kind='messageEdited'), CHAT)
     assert stale['disposition'] == 'STALE_EVENT' and not stale['accepted']
@@ -663,33 +757,39 @@ def test_missing_state_file_rebuilds_head_from_receipts(tmp_path):
 
 
 def test_stale_delivery_obligation_is_never_redelivered(tmp_path, monkeypatch):
+    # Exercises the real gateway ledger, not a stand-in: the fix depends on an
+    # upstream symbol, and only the real row state proves the boot sweep will
+    # not claim this answer.
     plugin, adapter = _plugin_adapter(tmp_path, monkeypatch)
+    from gateway import delivery_ledger
+    home = tmp_path / 'hermes-home'
+    monkeypatch.setenv('HERMES_HOME', str(home))
+    monkeypatch.setattr(delivery_ledger, '_db_path', lambda: home / 'state.db')
+
+    def obligation_row(obligation_id):
+        with delivery_ledger._connect() as conn:
+            return conn.execute('SELECT state FROM delivery_obligations WHERE obligation_id=?',
+                                (obligation_id,)).fetchone()
+
+    stale_obligation, live_obligation = 'obl-stale', 'obl-live'
+    for obligation_id in (stale_obligation, live_obligation):
+        delivery_ledger.record_obligation(
+            obligation_id=obligation_id, session_key='line:test', platform='line',
+            chat_id=CHAT, thread_id=None, content='an answer')
+
     store = adapter._input_lifecycle
     binding = _accepted(store, 'evt-1', 1000, 'old')
     store.accept(_event('evt-2', 2000, 'new', kind='messageEdited'), CHAT)
-    updates = []
-
-    class _Ledger:
-        @staticmethod
-        def _update_state(obligation_id, state, error=''):
-            updates.append((obligation_id, state, error))
-
-    monkeypatch.setitem(sys.modules, 'gateway.delivery_ledger', _Ledger)
     stale = plugin.SendResult(success=False, error='stale_input_revision')
-    asyncio.run(adapter._finalize_delivery_obligation('obl-1', stale, None, adapter))
-    assert updates == [('obl-1', 'abandoned', 'stale_input_revision')], \
-        "a 'failed' row is claimed by the boot sweep and redelivered without turn context"
+    asyncio.run(adapter._finalize_delivery_obligation(stale_obligation, stale, None, adapter))
+    assert obligation_row(stale_obligation)[0] == 'abandoned', \
+        "a 'failed' row is claimed by the boot sweep and redelivered with no turn context"
+    assert not delivery_ledger.sweep_recoverable(), 'an abandoned row must never be reclaimed'
 
-    sent = []
-
-    async def ok(self, obligation_id, result, event, delivery_adapter):
-        sent.append(result)
-
-    monkeypatch.setattr(plugin.native.LineAdapter, '_finalize_delivery_obligation', ok,
-                        raising=False)
-    asyncio.run(adapter._finalize_delivery_obligation('obl-2', plugin.SendResult(success=True),
-                                                      None, adapter))
-    assert sent, 'every other obligation keeps the native finalize path'
+    asyncio.run(adapter._finalize_delivery_obligation(live_obligation,
+                                                      plugin.SendResult(success=True), None, adapter))
+    assert obligation_row(live_obligation)[0] == 'delivered', \
+        'every other obligation keeps the native delivered/failed finalize'
 
 
 def test_dropped_turn_releases_its_reply_token(tmp_path, monkeypatch):

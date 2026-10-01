@@ -2,6 +2,7 @@
 import asyncio
 import contextvars
 import json
+import os
 from pathlib import Path
 import re
 import sys
@@ -45,7 +46,8 @@ class VideoLineAdapter(native.LineAdapter):
         self._video_state = self._video_home/'video-turns'
         self._video_state.mkdir(mode=0o700, parents=True, exist_ok=True)
         self._video_jobs = (getattr(config,'extra',{}) or {}).get('video_jobs_root', str(JOBS))
-        self._input_lifecycle = InputLifecycle(self._video_home/'line-input-lifecycle')
+        self._input_lifecycle = InputLifecycle(self._video_home/'line-input-lifecycle',
+                                             owner=f"{os.getpid()}-{id(self):x}")
         self._active_videos = {}
         self._reviewed_cache = {}
         self._latest_reply_tokens = {}
