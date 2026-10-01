@@ -46,8 +46,7 @@ class VideoLineAdapter(native.LineAdapter):
         self._video_state = self._video_home/'video-turns'
         self._video_state.mkdir(mode=0o700, parents=True, exist_ok=True)
         self._video_jobs = (getattr(config,'extra',{}) or {}).get('video_jobs_root', str(JOBS))
-        self._input_lifecycle = InputLifecycle(self._video_home/'line-input-lifecycle',
-                                             owner=f"{os.getpid()}-{id(self):x}")
+        self._input_lifecycle = InputLifecycle(self._video_home/'line-input-lifecycle')
         self._active_videos = {}
         self._reviewed_cache = {}
         self._latest_reply_tokens = {}
@@ -123,12 +122,16 @@ class VideoLineAdapter(native.LineAdapter):
         if handle and decision['input_revision'] > (previous.get('input_binding') or {}).get('input_revision', 0):
             handle.interrupt()
         await super()._handle_message_event({**event, '_ninax_input': decision})
+        # Record the newest revision under this key, not just a token value:
+        # concurrent dispatches interleave at the await above, so a token read
+        # afterwards may already belong to a newer revision. Comparing revisions
+        # keeps a superseded turn from restoring a stale token.
         stashed = self._reply_tokens.get(key)
         if stashed:
             now = time.time()
             self._latest_reply_tokens = {k: v for k, v in self._latest_reply_tokens.items()
-                                         if v[1] > now}
-            self._latest_reply_tokens[key] = stashed
+                                         if v[1][1] > now}
+            self._latest_reply_tokens[key] = (decision['input_revision'], stashed)
 
     async def _process_message_background(self, event, session_key):
         raw = event.raw_message if isinstance(getattr(event, 'raw_message', None), dict) else {}
@@ -140,12 +143,12 @@ class VideoLineAdapter(native.LineAdapter):
             if not self._input_lifecycle.begin_job(input_binding):
                 # Dropping before the native per-turn body would skip its reply
                 # token cleanup, so release our own token here instead.
-                self._release_dropped_reply_token(event)
+                self._release_dropped_reply_token(event, input_binding)
                 return None
         except (OSError, ValueError, json.JSONDecodeError):
             native.logger.error('LINE: input job receipt failed for %s',
                                 input_binding.get('webhook_event_id'))
-            self._release_dropped_reply_token(event)
+            self._release_dropped_reply_token(event, input_binding)
             return None
         input_token = _INPUT.set(input_binding)
         status = 'FAILED'
@@ -164,22 +167,28 @@ class VideoLineAdapter(native.LineAdapter):
                                     input_binding.get('webhook_event_id'))
             # A superseded task's cleanup must not steal the reply token a
             # newer revision just stashed under the same (chat, message) key.
-            key = (event.source.chat_id, event.message_id)
-            latest = self._latest_reply_tokens.get(key)
-            if (latest and self._reply_tokens.get(key) != latest
-                    and not self._input_lifecycle.is_current(input_binding)):
-                self._reply_tokens[key] = latest
+            self._restore_newer_reply_token(event, input_binding)
             _INPUT.reset(input_token)
 
-    def _release_dropped_reply_token(self, event):
-        """Native cleanup pops the reply token in a ``finally`` this drop skips.
-        A newer revision of the same message stashes its own token under the
-        same key, so only discard this turn's token when nobody replaced it."""
+    def _restore_newer_reply_token(self, event, input_binding):
+        """A superseded turn's cleanup must not steal the reply token a newer
+        revision stashed under the same (chat, message) key. Compare revisions,
+        not token values: concurrent dispatches interleave, so a token read back
+        may already belong to another revision."""
         key = (event.source.chat_id, event.message_id)
         latest = self._latest_reply_tokens.get(key)
-        if latest and self._reply_tokens.get(key) != latest:
-            self._reply_tokens[key] = latest
-        else:
+        if (latest and latest[0] > (input_binding or {}).get('input_revision', 0)
+                and self._reply_tokens.get(key) != latest[1]):
+            self._reply_tokens[key] = latest[1]
+
+    def _release_dropped_reply_token(self, event, input_binding):
+        """Native cleanup pops the reply token in a ``finally`` this drop skips.
+        Put back a newer revision's token when one is recorded for this key;
+        otherwise drop this turn's own token."""
+        key = (event.source.chat_id, event.message_id)
+        self._restore_newer_reply_token(event, input_binding)
+        latest = self._latest_reply_tokens.get(key)
+        if not (latest and self._reply_tokens.get(key) == latest[1]):
             self._reply_tokens.pop(key, None)
 
     async def _process_current_message_background(self, event, session_key):

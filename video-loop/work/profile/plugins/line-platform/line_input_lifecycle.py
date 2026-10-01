@@ -6,14 +6,16 @@ It intentionally stores hashes and identifiers, never message bodies.
 
 One adapter process owns each store root: mutual exclusion is per-process, so
 two gateways sharing a profile home would interleave their read/write cycles.
-Job receipts name the store that wrote them, so a second adapter over the same
-root reconciles only genuinely orphaned work.
+Job receipts name the store that wrote them, and a store unregisters itself when
+closed or collected, so a second adapter over the same root reconciles only
+genuinely orphaned work.
 Receipts are append-only by design — they are the audit record, so retention
 is a deployment policy, not something the store decides.
 """
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import logging
 import os
@@ -22,6 +24,7 @@ import tempfile
 import threading
 import time
 from typing import Any, Dict
+import weakref
 
 
 logger = logging.getLogger(__name__)
@@ -34,9 +37,12 @@ TERMINAL_JOB_STATES = frozenset({"COMPLETED", "FAILED", "INTERRUPTED", "SUPERSED
 # head must be resolved by a key that does not depend on arrival order.
 _EVENT_RANK = {"message": 0, "messageEdited": 1}
 
-# Store instances alive in this process. A STARTED job whose owner is still here
-# is running work, not work orphaned by a restart.
-_LIVE_OWNERS: set = set()
+# Stores alive in this process, keyed by owner. A STARTED job whose owner is
+# still here is running work, not work orphaned by a restart. Entries vanish
+# when the store is garbage collected, so a replaced adapter's dead work is
+# reconciled by the next sweep instead of being skipped forever.
+_LIVE_OWNERS: "weakref.WeakValueDictionary[str, Any]" = weakref.WeakValueDictionary()
+_OWNER_SEQUENCE = itertools.count(1)
 
 
 def _same_millisecond_disposition(event_type: str, current_event_type: Any) -> str:
@@ -48,12 +54,15 @@ def _same_millisecond_disposition(event_type: str, current_event_type: Any) -> s
     kind the events are genuinely indistinguishable, and discarding the newest
     input would silently answer superseded content, so the later arrival wins —
     deterministic for this store, whose single owning adapter process observes
-    one arrival order. A head rebuilt from receipts has no recorded type and is
-    treated as an edit, so recovery cannot be undone by a late original.
+    one arrival order. A head whose type is unknown (rebuilt from receipts, or
+    written before the field existed) is treated as an edit, the conservative
+    choice: its content already superseded some original, so only a real edit
+    may replace it.
     """
-    if isinstance(current_event_type, str) and current_event_type in _EVENT_RANK:
-        if _EVENT_RANK.get(event_type, 0) < _EVENT_RANK[current_event_type]:
-            return "STALE_EVENT"
+    current_rank = (_EVENT_RANK[current_event_type]
+                    if current_event_type in _EVENT_RANK else max(_EVENT_RANK.values()))
+    if _EVENT_RANK.get(event_type, 0) < current_rank:
+        return "STALE_EVENT"
     return "ACCEPTED"
 
 
@@ -129,9 +138,16 @@ class InputLifecycle:
         self.root = Path(root)
         self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
         self._lock = threading.RLock()
-        self._owner = owner or f"{os.getpid()}-{id(self):x}"
-        _LIVE_OWNERS.add(self._owner)
+        # A counter, not id(): CPython recycles object addresses, so a new store
+        # could otherwise inherit a dead one's owner and skip its stranded work.
+        self._owner = owner or f"{os.getpid()}-{next(_OWNER_SEQUENCE)}"
+        _LIVE_OWNERS[self._owner] = self
         self._reconcile_restarted_jobs(self._owner)
+
+    def close(self) -> None:
+        """Release this store's ownership so the next sweep reconciles its
+        stranded work. Adapters are long-lived; reconnect paths may replace one."""
+        _LIVE_OWNERS.pop(self._owner, None)
 
     def _reconcile_restarted_jobs(self, owner: str = "") -> None:
         """A ``STARTED`` job surviving process restart is dead work: mark it

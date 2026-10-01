@@ -402,7 +402,7 @@ def test_superseded_turn_restores_newer_reply_token(tmp_path, monkeypatch):
     key = (CHAT, 'm-1')
     newer = ('token-new', time.time() + 30)
     adapter._reply_tokens[key] = newer  # stashed by the newer revision's dispatch
-    adapter._latest_reply_tokens[key] = newer
+    adapter._latest_reply_tokens[key] = (2, newer)
 
     async def during(event, session_key):
         store.accept(_event('evt-2', 2000, 'new', kind='messageEdited'), CHAT)
@@ -419,7 +419,7 @@ def test_superseded_turn_restores_newer_reply_token(tmp_path, monkeypatch):
     key2 = (CHAT, 'm-9')
     own = ('token-own', time.time() + 30)
     adapter._reply_tokens[key2] = own
-    adapter._latest_reply_tokens[key2] = own
+    adapter._latest_reply_tokens[key2] = (binding2['input_revision'], own)
 
     async def during2(event, session_key):
         adapter._reply_tokens.pop(key2, None)
@@ -686,6 +686,70 @@ def test_second_adapter_does_not_freeze_a_live_job(tmp_path):
     assert json.loads(path.read_text())['status'] == 'INTERRUPTED'
 
 
+def test_recovered_head_is_not_displaced_by_a_late_original(tmp_path):
+    # A head rebuilt from a job receipt carries no event type; it must still rank
+    # as an edit, or a late original message rolls recovery back to pre-edit text.
+    root = tmp_path / 'line-input-lifecycle'
+    store = _store(tmp_path)
+    original = _accepted(store, 'evt-1', 1000, 'ORIGINAL')
+    head = _accepted(store, 'evt-2', 2000, 'EDITED-NEWEST', kind='messageEdited')
+    # Drop the event receipts so only the job receipts can rebuild the head.
+    for path in (root / 'events').glob('*.json'):
+        path.unlink()
+    next((root / 'messages').glob('*.json')).write_text('{corrupt', encoding='utf-8')
+    restarted = _restarted(root)
+    late = restarted.accept(_event('evt-late', 2000, 'ORIGINAL'), CHAT)
+    assert late['disposition'] == 'STALE_EVENT' and not late['accepted'], \
+        'an untyped recovered head was rolled back by a late original message'
+    assert restarted.is_current(head) and not restarted.is_current(original)
+
+
+def test_closed_store_lets_the_next_sweep_reconcile_its_work(tmp_path):
+    # A replaced adapter must not leave its owner registered forever, or its
+    # genuinely stranded STARTED job is skipped by every future sweep.
+    root = tmp_path / 'line-input-lifecycle'
+    store = _module().InputLifecycle(root)
+    _accepted(store, 'evt-1', 1000, 'abandoned')
+    store.close()
+    replacement = _module().InputLifecycle(root)
+    job = json.loads(next((root / 'jobs').glob('*.json')).read_text())
+    assert job['status'] == 'INTERRUPTED', 'a closed store stranded its job indefinitely'
+    replacement.close()
+
+    # Owners are unique per store, so a recycled address cannot inherit one.
+    a = _module().InputLifecycle(root)
+    b = _module().InputLifecycle(root)
+    assert a._owner != b._owner
+    a.close()
+    b.close()
+
+
+def test_reply_token_restore_compares_revisions_not_values(tmp_path, monkeypatch):
+    # Concurrent dispatches interleave at the await in _handle_message_event, so
+    # the recorded token may already belong to another revision: restoring by
+    # token identity alone would hand back an older revision's spent token.
+    plugin, adapter = _plugin_adapter(tmp_path, monkeypatch)
+    store = adapter._input_lifecycle
+    binding = store.accept(_event('evt-1', 1000, 'old'), CHAT)
+    key = (CHAT, 'm-1')
+    stale_token = ('token-from-older-revision', time.time() + 30)
+    current_token = ('token-current', time.time() + 30)
+    adapter._reply_tokens[key] = current_token
+    # A lower revision recorded later (the interleave) must not win.
+    adapter._latest_reply_tokens[key] = (binding['input_revision'], stale_token)
+    adapter._restore_newer_reply_token(
+        SimpleNamespace(source=SimpleNamespace(chat_id=CHAT), message_id='m-1'), binding)
+    assert adapter._reply_tokens.get(key) == current_token
+
+    newer_binding = store.accept(_event('evt-2', 2000, 'new', kind='messageEdited'), CHAT)
+    newer_token = ('token-newer', time.time() + 30)
+    adapter._latest_reply_tokens[key] = (newer_binding['input_revision'], newer_token)
+    adapter._restore_newer_reply_token(
+        SimpleNamespace(source=SimpleNamespace(chat_id=CHAT), message_id='m-1'), binding)
+    assert adapter._reply_tokens.get(key) == newer_token, \
+        "a superseded turn must hand back the newer revision's token"
+
+
 def test_rebuild_head_ignores_rejected_event_receipts(tmp_path):
     root = tmp_path / 'line-input-lifecycle'
     store = _store(tmp_path)
@@ -808,7 +872,7 @@ def test_dropped_turn_releases_its_reply_token(tmp_path, monkeypatch):
     binding2 = store.accept(_event('evt-2', 2000, 'new', kind='messageEdited'), CHAT)
     newer = ('token-new', time.time() + 30)
     adapter._reply_tokens[key] = newer
-    adapter._latest_reply_tokens[key] = newer
+    adapter._latest_reply_tokens[key] = (binding2['input_revision'], newer)
     event2 = SimpleNamespace(raw_message={'_ninax_input': binding2}, text='new',
                              message_id='m-1', source=SimpleNamespace(chat_id=CHAT))
     adapter._process_current_message_background = lambda *a: asyncio.sleep(0)
