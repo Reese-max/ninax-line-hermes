@@ -28,6 +28,23 @@ logger = logging.getLogger(__name__)
 SCHEMA_VERSION = 1
 TERMINAL_JOB_STATES = frozenset({"COMPLETED", "FAILED", "INTERRUPTED", "SUPERSEDED"})
 
+# LINE gives no total order for two events carrying the same millisecond, so the
+# head must be resolved by a key that does not depend on arrival order.
+_EVENT_RANK = {"message": 0, "messageEdited": 1}
+
+
+def _outranks(event_type: str, content_sha256: str, current_event_type: Any, current_hash: Any) -> bool:
+    """Deterministic, arrival-independent precedence for equal-timestamp events.
+
+    A state file written before this field existed has no recorded type, so its
+    head ranks below every known event type and the content hash decides.
+    """
+    if not isinstance(current_hash, str):
+        return True
+    return ((_EVENT_RANK.get(event_type, -1), content_sha256)
+            > (_EVENT_RANK.get(current_event_type, -1) if isinstance(current_event_type, str) else -1,
+               current_hash))
+
 
 def _digest(value: Any) -> str:
     encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
@@ -53,6 +70,19 @@ def _atomic_json(path: Path, value: Dict[str, Any]) -> None:
         handle.flush()
         os.fsync(handle.fileno())
     temporary.replace(path)
+    # Fsync the directory too: without it a power loss can drop the rename while
+    # an earlier receipt's rename survives, so a committed event outlives the
+    # message state it depends on and the identity rebuilds from partial data.
+    try:
+        directory = os.open(path.parent, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(directory)
+    except OSError:
+        pass
+    finally:
+        os.close(directory)
 
 
 def _quarantine(path: Path) -> None:
@@ -192,15 +222,22 @@ class InputLifecycle:
                     if timestamp > current_timestamp:
                         state["current_event_timestamp_ms"] = timestamp
                         state["current_webhook_event_id"] = event_id
+                        state["current_event_type"] = event["type"]
                         _atomic_json(state_path, state)
                 elif timestamp < current_timestamp:
                     disposition = "STALE_EVENT"
+                elif timestamp == current_timestamp and not _outranks(event["type"], content_sha256,
+                                                                     state.get("current_event_type"),
+                                                                     current_hash):
+                    # Equal timestamps are indistinguishable by the platform
+                    # contract, so arrival order must not decide the head: a
+                    # late event would otherwise roll the current revision back
+                    # to older content. Order them by a deterministic,
+                    # arrival-independent key (edit events outrank plain
+                    # messages, then the content hash), which every replica and
+                    # every replay resolves identically.
+                    disposition = "STALE_EVENT"
                 else:
-                    # Same or later timestamp with different content is a newer
-                    # revision. Edit events may reuse the original message
-                    # timestamp, so an equal timestamp cannot be treated as a
-                    # conflict — arrival order is the remaining deterministic
-                    # tiebreak, and rejecting would wedge the message forever.
                     supersedes = revision
                     revisions[-1] = {**revisions[-1], "status": "SUPERSEDED", "superseded_at": time.time()}
                     revision += 1
@@ -234,6 +271,7 @@ class InputLifecycle:
                         "current_revision": revision,
                         "current_content_sha256": content_sha256,
                         "current_event_timestamp_ms": timestamp,
+                        "current_event_type": event["type"],
                         "current_webhook_event_id": event_id,
                         "revisions": revisions,
                     }
@@ -262,14 +300,22 @@ class InputLifecycle:
                                 "finished_at": time.time()})
 
     def _read_state(self, path: Path, identity: str) -> Dict[str, Any]:
-        """Load the revision head; heal unreadable v1 state from receipts.
+        """Load the revision head; heal unreadable or absent v1 state from receipts.
 
         A file written by a newer schema still raises — an old binary must not
-        rewrite state it cannot interpret. Unreadable or invalid v1 state is
-        quarantined and the head rebuilt from the identity's surviving job and
-        event receipts, so a corrupt file neither wedges the message forever
-        nor lets a stale event pose as the latest input.
+        rewrite state it cannot interpret. Unreadable, invalid or missing v1
+        state is quarantined when present and the head rebuilt from the
+        identity's surviving job and event receipts, so a lost file neither
+        wedges the message forever nor lets a stale event pose as the latest
+        input. A first-ever message has no receipts and stays revision 1.
         """
+        if not path.exists():
+            # A brand-new identity has no job receipt and needs no recovery scan;
+            # only a lost file over surviving work has to rebuild.
+            if not list((self.root / "jobs").glob(f"{identity}.*.json")):
+                return {}
+            logger.error("LINE: rebuilding missing lifecycle state %s from receipts", path.name)
+            return self._rebuild_state(identity, path)
         try:
             state = _strict_read(path)
         except (OSError, ValueError, json.JSONDecodeError):
@@ -323,12 +369,16 @@ class InputLifecycle:
                     "current_revision": value["input_revision"],
                     "current_content_sha256": value["input_sha256"],
                     "current_event_timestamp_ms": value["event_timestamp_ms"],
+                    "current_event_type": (receipt.get("event_type")
+                                           if receipt.get("event_type") in _EVENT_RANK else "recovered"),
                     "current_webhook_event_id": value["webhook_event_id"],
                     "revisions": [{"revision": value["input_revision"],
                                    "content_sha256": value["input_sha256"],
                                    "event_timestamp_ms": value["event_timestamp_ms"],
                                    "webhook_event_id": value["webhook_event_id"],
-                                   "event_type": "recovered", "status": "CURRENT"}],
+                                   "event_type": (receipt.get("event_type")
+                                                  if receipt.get("event_type") in _EVENT_RANK else "recovered"),
+                                   "status": "CURRENT"}],
                     "recovered_from_receipts": True,
                 }
         if head is not None:

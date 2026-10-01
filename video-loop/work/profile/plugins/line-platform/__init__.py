@@ -136,10 +136,14 @@ class VideoLineAdapter(native.LineAdapter):
             return await self._process_current_message_background(event, session_key)
         try:
             if not self._input_lifecycle.begin_job(input_binding):
+                # Dropping before the native per-turn body would skip its reply
+                # token cleanup, so release our own token here instead.
+                self._release_dropped_reply_token(event)
                 return None
         except (OSError, ValueError, json.JSONDecodeError):
             native.logger.error('LINE: input job receipt failed for %s',
                                 input_binding.get('webhook_event_id'))
+            self._release_dropped_reply_token(event)
             return None
         input_token = _INPUT.set(input_binding)
         status = 'FAILED'
@@ -164,6 +168,17 @@ class VideoLineAdapter(native.LineAdapter):
                     and not self._input_lifecycle.is_current(input_binding)):
                 self._reply_tokens[key] = latest
             _INPUT.reset(input_token)
+
+    def _release_dropped_reply_token(self, event):
+        """Native cleanup pops the reply token in a ``finally`` this drop skips.
+        A newer revision of the same message stashes its own token under the
+        same key, so only discard this turn's token when nobody replaced it."""
+        key = (event.source.chat_id, event.message_id)
+        latest = self._latest_reply_tokens.get(key)
+        if latest and self._reply_tokens.get(key) != latest:
+            self._reply_tokens[key] = latest
+        else:
+            self._reply_tokens.pop(key, None)
 
     async def _process_current_message_background(self, event, session_key):
         request = self._video_request(event.text, session_key)
@@ -294,6 +309,22 @@ class VideoLineAdapter(native.LineAdapter):
                 and result.success):
             self._record_delivery_attempt(input_binding,'DELIVERED',payload_sha256)
         return result
+
+    async def _finalize_delivery_obligation(self, obligation_id, result, event, delivery_adapter):
+        # A revision-superseded answer is a terminal decision, not a transient
+        # failure: the native ledger would mark it 'failed', and the next boot's
+        # sweep claims 'failed' rows and redelivers them through send() with no
+        # turn context — which would put the stale summary on LINE after a
+        # restart. 'abandoned' is the ledger's never-deliver state.
+        if str(getattr(result, 'error', '') or '') == 'stale_input_revision':
+            try:
+                from gateway.delivery_ledger import _update_state
+                await asyncio.to_thread(_update_state, obligation_id, 'abandoned',
+                                       error='stale_input_revision')
+            except Exception:
+                native.logger.error('LINE: could not close the stale delivery obligation')
+            return
+        return await super()._finalize_delivery_obligation(obligation_id, result, event, delivery_adapter)
 
     async def _handle_postback_event(self, event):
         try:

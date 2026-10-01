@@ -3,6 +3,7 @@ import asyncio
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import shutil
 import sys
@@ -599,3 +600,137 @@ def test_superseded_input_drops_before_background_work(tmp_path, monkeypatch):
     adapter._process_current_message_background = lambda *a: reached.append(a) or asyncio.sleep(0)
     result = asyncio.run(adapter._process_message_background(event, 'session'))
     assert result is None and reached == [], 'superseded input must not start a turn'
+
+
+def test_equal_timestamp_head_is_arrival_order_independent(tmp_path):
+    # LINE gives no total order inside one millisecond. Whichever equal-timestamp
+    # event arrives last must not decide the head, or a late event rolls the
+    # current revision back to older content.
+    def head_after(events):
+        root = tmp_path / ('lc-' + '-'.join(f'{eid}{text}' for eid, text, _ in events))
+        store = _module().InputLifecycle(root)
+        current = None
+        for event_id, text, kind in events:
+            decision = store.accept(_event(event_id, 3000, text, kind=kind), CHAT)
+            if decision['accepted']:
+                current = decision
+        return current, store.is_current(current)
+
+    original = [('evt-1', 'first', 'message'), ('evt-2', 'second', 'messageEdited'),
+                ('evt-3', 'current', 'messageEdited')]
+    late = original + [('evt-late', 'first', 'message')]
+    forward, forward_current = head_after(original)
+    backward, backward_current = head_after(list(reversed(late)))
+    assert forward_current and backward_current
+    assert forward['input_sha256'] == backward['input_sha256'], \
+        'a late equal-timestamp event changed the head only because it arrived last'
+
+    # A plain message event is never newer than an edit at the same timestamp.
+    store = _store(tmp_path / 'message-vs-edit')
+    _accepted(store, 'evt-a', 1000, 'original')
+    _accepted(store, 'evt-b', 1000, 'edited', kind='messageEdited')
+    assert store.accept(_event('evt-c', 1000, 'original'), CHAT)['disposition'] == 'STALE_EVENT'
+
+
+def test_equal_timestamp_edit_supersedes_without_wedging(tmp_path):
+    store = _store(tmp_path)
+    original = _accepted(store, 'evt-1', 1000, 'question')
+    edited = store.accept(_event('evt-2', 1000, 'edited question', kind='messageEdited'), CHAT)
+    assert edited['accepted'] and edited['input_revision'] == 2, \
+        'a genuine edit reusing the message timestamp must not be dropped'
+    assert not store.is_current(original) and store.is_current(edited)
+
+
+def test_missing_state_file_rebuilds_head_from_receipts(tmp_path):
+    root = tmp_path / 'line-input-lifecycle'
+    store = _store(tmp_path)
+    original = _accepted(store, 'evt-1', 1000, 'old')
+    store.finish_job(original, 'COMPLETED')
+    edited = _accepted(store, 'evt-2', 2000, 'new', kind='messageEdited')
+    next((root / 'messages').glob('*.json')).unlink()
+    # Losing the state file must not pose as a brand-new message: the surviving
+    # job receipt would otherwise refuse every later revision forever. The head
+    # rebuilds lazily on the next admission decision, failing closed until then.
+    restarted = _module().InputLifecycle(root)
+    assert not restarted.is_current(edited)
+    stale = restarted.accept(_event('evt-3', 1500, 'ancient', kind='messageEdited'), CHAT)
+    assert stale['disposition'] == 'STALE_EVENT' and not stale['accepted']
+    assert restarted.is_current(edited) and not restarted.is_current(original)
+    assert not restarted.begin_job(edited), 'the surviving job receipt still blocks a restart'
+    revived = restarted.accept(_event('evt-4', 3000, 'newer', kind='messageEdited'), CHAT)
+    assert revived['accepted'] and revived['input_revision'] == 3, 'the rebuilt head keeps its revision'
+    assert restarted.begin_job(revived)
+
+
+def test_stale_delivery_obligation_is_never_redelivered(tmp_path, monkeypatch):
+    plugin, adapter = _plugin_adapter(tmp_path, monkeypatch)
+    store = adapter._input_lifecycle
+    binding = _accepted(store, 'evt-1', 1000, 'old')
+    store.accept(_event('evt-2', 2000, 'new', kind='messageEdited'), CHAT)
+    updates = []
+
+    class _Ledger:
+        @staticmethod
+        def _update_state(obligation_id, state, error=''):
+            updates.append((obligation_id, state, error))
+
+    monkeypatch.setitem(sys.modules, 'gateway.delivery_ledger', _Ledger)
+    stale = plugin.SendResult(success=False, error='stale_input_revision')
+    asyncio.run(adapter._finalize_delivery_obligation('obl-1', stale, None, adapter))
+    assert updates == [('obl-1', 'abandoned', 'stale_input_revision')], \
+        "a 'failed' row is claimed by the boot sweep and redelivered without turn context"
+
+    sent = []
+
+    async def ok(self, obligation_id, result, event, delivery_adapter):
+        sent.append(result)
+
+    monkeypatch.setattr(plugin.native.LineAdapter, '_finalize_delivery_obligation', ok,
+                        raising=False)
+    asyncio.run(adapter._finalize_delivery_obligation('obl-2', plugin.SendResult(success=True),
+                                                      None, adapter))
+    assert sent, 'every other obligation keeps the native finalize path'
+
+
+def test_dropped_turn_releases_its_reply_token(tmp_path, monkeypatch):
+    plugin, adapter = _plugin_adapter(tmp_path, monkeypatch)
+    store = adapter._input_lifecycle
+    binding = store.accept(_event('evt-1', 1000, 'old'), CHAT)
+    key = (CHAT, 'm-1')
+    adapter._reply_tokens[key] = ('token-old', time.time() + 30)
+    store.begin_job(binding)
+    event = SimpleNamespace(raw_message={'_ninax_input': binding}, text='old',
+                            message_id='m-1', source=SimpleNamespace(chat_id=CHAT))
+    assert asyncio.run(adapter._process_message_background(event, 'session')) is None
+    assert key not in adapter._reply_tokens, 'a dropped turn must not leave a stale reply token'
+
+    # A newer revision's token under the same key survives the older drop.
+    binding2 = store.accept(_event('evt-2', 2000, 'new', kind='messageEdited'), CHAT)
+    newer = ('token-new', time.time() + 30)
+    adapter._reply_tokens[key] = newer
+    adapter._latest_reply_tokens[key] = newer
+    event2 = SimpleNamespace(raw_message={'_ninax_input': binding2}, text='new',
+                             message_id='m-1', source=SimpleNamespace(chat_id=CHAT))
+    adapter._process_current_message_background = lambda *a: asyncio.sleep(0)
+    asyncio.run(adapter._process_message_background(event2, 'session'))
+    assert adapter._reply_tokens.get(key) == newer
+
+
+def test_atomic_json_fsyncs_the_parent_directory(tmp_path, monkeypatch):
+    module = _module()
+    synced = []
+    real_fsync, real_open = os.fsync, os.open
+
+    def fsync(fd):
+        synced.append(fd)
+        return real_fsync(fd)
+
+    def open_(path, flags, *args, **kwargs):
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(module.os, 'fsync', fsync)
+    monkeypatch.setattr(module.os, 'open', open_)
+    target = tmp_path / 'nested' / 'receipt.json'
+    module._atomic_json(target, {'a': 1})
+    assert target.exists() and len(synced) == 2, \
+        'a rename that is not itself durable can drop the receipt on power loss'
