@@ -138,8 +138,11 @@ class InputLifecycle:
                     raise ValueError("invalid LINE event receipt")
                 old_value = self._binding_fields(old_binding)
                 job = _strict_read(self._job_path(old_value["input_id"], old_value["input_revision"]))
-                resume = (existing_event.get("disposition") == "ACCEPTED"
-                          and self.is_current(old_value) and not job)
+                # The recorded disposition is history, not the resume gate: any
+                # receipt whose binding still resolves to the current head may
+                # restart work while its job receipt is absent — including one
+                # torn between the resume decision and begin_job.
+                resume = self.is_current(old_value) and not job
                 return {**old_binding, "disposition": "RESUME_ACCEPTED" if resume else "DUPLICATE_EVENT",
                         "accepted": resume}
 
@@ -159,21 +162,23 @@ class InputLifecycle:
                         or not revisions or not isinstance(revisions[-1], dict)
                         or revisions[-1].get("revision") != revision):
                     raise ValueError("invalid LINE lifecycle state")
-                if timestamp < current_timestamp:
-                    disposition = "STALE_EVENT"
-                elif content_sha256 == current_hash:
+                if content_sha256 == current_hash:
                     # The state commit intentionally precedes the event receipt.
-                    # If the process died between those writes, the same event
-                    # must resume this revision instead of being lost forever.
+                    # If the process died between those writes, a later event
+                    # must resume this revision instead of being lost forever —
+                    # regardless of which event id owns the bookkeeping, so a
+                    # duplicate's timestamp takeover cannot strand the work.
                     job = _strict_read(self._job_path(identity, revision))
-                    resume = (state.get("current_webhook_event_id") == event_id and not job)
+                    resume = not job
                     disposition = "RESUME_ACCEPTED" if resume else "DUPLICATE_CONTENT"
                     # Preserve the greatest observed occurrence time so a later
                     # out-of-order event cannot roll the current version back.
-                    if timestamp > current_timestamp and not resume:
+                    if timestamp > current_timestamp:
                         state["current_event_timestamp_ms"] = timestamp
                         state["current_webhook_event_id"] = event_id
                         _atomic_json(state_path, state)
+                elif timestamp < current_timestamp:
+                    disposition = "STALE_EVENT"
                 else:
                     # Same or later timestamp with different content is a newer
                     # revision. Edit events may reuse the original message

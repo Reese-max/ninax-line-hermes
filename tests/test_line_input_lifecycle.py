@@ -144,7 +144,12 @@ def test_same_content_dedupe_and_equal_timestamp_tiebreak(tmp_path):
     assert edited_again['accepted'] and edited_again['input_revision'] == 2
     assert not store.is_current(edited) and store.is_current(edited_again)
     same = store.accept(_event('evt-3', 2000, 'edited again', kind='messageEdited'), CHAT)
-    assert same['disposition'] == 'DUPLICATE_CONTENT' and not same['accepted']
+    # Revision 2 was accepted but never began work; an identical later event
+    # resumes it rather than stranding the revision as a dead duplicate.
+    assert same['disposition'] == 'RESUME_ACCEPTED' and same['accepted']
+    assert store.begin_job(same)
+    again = store.accept(_event('evt-5', 2500, 'edited again', kind='messageEdited'), CHAT)
+    assert again['disposition'] == 'DUPLICATE_CONTENT' and not again['accepted']
     late = store.accept(_event('evt-4', 1500, 'old again', kind='messageEdited'), CHAT)
     assert late['disposition'] == 'STALE_EVENT' and not late['accepted']
     assert store.is_current(edited_again)
@@ -228,6 +233,34 @@ def test_torn_receipt_resumes_same_revision(tmp_path):
     assert recovered['disposition'] == 'RESUME_ACCEPTED' and recovered['accepted']
     assert recovered['input_revision'] == accepted['input_revision']
     assert _module().InputLifecycle(root).begin_job(recovered)
+
+
+def test_torn_resume_survives_duplicate_takeover(tmp_path):
+    root = tmp_path / 'line-input-lifecycle'
+    store = _store(tmp_path)
+    original = store.accept(_event('evt-a', 1000, 'same'), CHAT)
+    assert original['accepted']
+    # Crash after the message state commit but before the event receipt write.
+    (root / 'events' / f"{hashlib.sha256(b'evt-a').hexdigest()}.json").unlink()
+    # A distinct same-content event at a later timestamp takes over the
+    # observed-event bookkeeping and carries the resume while no job exists.
+    carrier = store.accept(_event('evt-b', 2000, 'same'), CHAT)
+    assert carrier['disposition'] == 'RESUME_ACCEPTED' and carrier['accepted']
+    # The original event's redelivery still resumes the same revision;
+    # ownership of the bookkeeping must not strand accepted work.
+    resumed = store.accept(_event('evt-a', 1000, 'same', redelivery=True), CHAT)
+    assert resumed['disposition'] == 'RESUME_ACCEPTED' and resumed['accepted']
+    assert resumed['input_revision'] == original['input_revision']
+    # A redelivery of the bookkeeping event can also carry the resume.
+    via_dup = store.accept(_event('evt-b', 2000, 'same', redelivery=True), CHAT)
+    assert via_dup['disposition'] == 'RESUME_ACCEPTED' and via_dup['accepted']
+    # A RESUME_ACCEPTED receipt is itself resumable after another torn write.
+    resumed_again = store.accept(_event('evt-a', 1000, 'same', redelivery=True), CHAT)
+    assert resumed_again['disposition'] == 'RESUME_ACCEPTED' and resumed_again['accepted']
+    assert store.begin_job(resumed_again)
+    # Once the job exists, every same-content event is a plain duplicate.
+    assert store.accept(_event('evt-a', 1000, 'same', redelivery=True), CHAT)['disposition'] == 'DUPLICATE_EVENT'
+    assert store.accept(_event('evt-b', 2000, 'same', redelivery=True), CHAT)['disposition'] == 'DUPLICATE_EVENT'
 
 
 def test_restart_marks_orphaned_started_job_interrupted(tmp_path):
