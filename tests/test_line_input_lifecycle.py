@@ -588,6 +588,33 @@ def test_stale_postback_tap_is_rejected(tmp_path, monkeypatch):
     assert rid not in adapter._reviewed_cache
 
 
+def test_postback_from_wrong_chat_preserves_pending_answer_for_owner(tmp_path, monkeypatch):
+    plugin, adapter = _plugin_adapter(tmp_path, monkeypatch)
+    binding = _accepted(adapter._input_lifecycle, 'evt-1', 1000, 'slow question')
+    adapter._client = _FakeClient()
+    rid = adapter._cache.register_pending(CHAT, delivery_key=(CHAT, 'm-1'))
+    pending_key = (CHAT, 'm-1')
+    adapter._pending_buttons[pending_key] = rid
+    payload = 'reviewed answer'
+    adapter._cache.set_ready(rid, payload)
+    adapter._reviewed_cache[rid] = (
+        CHAT, plugin.digest(plugin.native._text_messages(payload)), binding)
+
+    wrong_owner = _postback(rid, token='wrong-chat')
+    wrong_owner['source'] = {'type': 'group', 'groupId': 'C-room-2'}
+    asyncio.run(adapter._handle_postback_event(wrong_owner))
+    assert adapter._client.calls == [], 'a different chat must not receive the cached answer'
+    assert adapter._cache.get(rid).state is plugin.native.State.READY, \
+        'a wrong-source tap must not consume the owner's pending response'
+    assert adapter._pending_buttons[pending_key] == rid
+    assert rid in adapter._reviewed_cache
+
+    asyncio.run(adapter._handle_postback_event(_postback(rid, token='owner-tap')))
+    assert adapter._client.calls == [
+        ('reply', 'owner-tap', plugin.native._text_messages(payload))]
+    assert rid not in adapter._reviewed_cache
+
+
 def test_new_revision_interrupts_active_video_run(tmp_path, monkeypatch):
     plugin, adapter = _plugin_adapter(tmp_path, monkeypatch)
     store = adapter._input_lifecycle
