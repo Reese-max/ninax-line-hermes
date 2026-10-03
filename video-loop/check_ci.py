@@ -60,7 +60,13 @@ def main():
             save()
             if result.returncode:
                 failed_check=next((Path(part).name for part in command[1:] if part.endswith(('.py','.sh'))),Path(command[0]).name)
-                raise RuntimeError(f'check_failed: {failed_check} exit={result.returncode}')
+                frames=[line.strip() for line in result.stderr.splitlines() if line.lstrip().startswith('File "')]
+                failures=[line.strip() for line in result.stderr.splitlines()
+                          if line.lstrip().startswith(('AssertionError','ModuleNotFoundError','ImportError',
+                                                       'ValueError','RuntimeError','TimeoutError'))]
+                details=' '.join(part for part in (frames[-1] if frames else '',
+                                                   failures[-1].split(':',1)[0] if failures else '') if part)
+                raise RuntimeError(f'check_failed: {failed_check} exit={result.returncode} {details}'.rstrip())
         subprocess.run(['git','diff','--exit-code','HEAD'],cwd=ROOT,check=True,capture_output=True)
         receipt['status']='PASS'
     except Exception as exc:
