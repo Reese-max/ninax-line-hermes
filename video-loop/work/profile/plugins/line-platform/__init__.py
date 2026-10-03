@@ -8,6 +8,7 @@ import re
 import sys
 import time
 from types import SimpleNamespace
+from uuid import NAMESPACE_URL, uuid5
 
 _PLUGIN_DIR = Path(__file__).parent
 if str(_PLUGIN_DIR) not in sys.path:
@@ -25,6 +26,14 @@ from video_review import MISSING_SOURCE_NOTICE, NOTICE, status_notice
 
 _TURN = contextvars.ContextVar('ninax_video_delivery', default=None)
 _INPUT = contextvars.ContextVar('ninax_line_input', default=None)
+_PUSH_STATUS_RE = re.compile(r'LINE push (\d{3})')
+_PUSH_MAX_ATTEMPTS = 3
+_PUSH_BACKOFF_S = (0.5, 1.0)
+try:
+    import aiohttp as _aiohttp
+    _TRANSIENT_PUSH_ERRORS = (TimeoutError, _aiohttp.ClientConnectionError)
+except ImportError:
+    _TRANSIENT_PUSH_ERRORS = (TimeoutError,)
 URL_RE = re.compile(r'https://[^\s<>"\']+')
 RECALL = re.compile(r'再(?:說|講)一次|重複.{0,4}(?:摘要|重點)')
 CONTINUE = re.compile(r'繼續摘要|繼續核對')
@@ -423,6 +432,8 @@ class VideoLineAdapter(native.LineAdapter):
         if prior.get('status') in {'sending','unknown','delivered'}:
             return SendResult(success=False,error='video_delivery_already_attempted')
         state['delivery'] = 'sending'
+        state['retry_key'] = str(uuid5(NAMESPACE_URL,digest(['line-retry-v1',state['binding']['turn_id'],chat_id,
+                                                          state['approval']['payload_sha256']])))
         self._record_delivery(state)
         owned_token = state.pop('reply_token','')
         token_key = (chat_id,state.get('message_id'))
@@ -434,7 +445,7 @@ class VideoLineAdapter(native.LineAdapter):
             remaining = min(10,state.get('deadline',time.monotonic()+10)-time.monotonic())
             if remaining<=0:
                 raise TimeoutError('video_delivery_deadline')
-            async with asyncio.timeout(remaining):
+            async with asyncio.timeout(remaining) as delivery_timeout:
                 if used_reply and not force_push:
                     try:
                         await self._client.reply(token,messages)
@@ -442,9 +453,9 @@ class VideoLineAdapter(native.LineAdapter):
                         # Only a definite invalid-token rejection permits push. A timeout may have posted.
                         if not (str(exc).startswith('LINE reply 400:') and 'Invalid reply token' in str(exc)):
                             raise
-                        await self._client.push(chat_id,messages)
+                        await self._push_with_retry(chat_id,messages,state,deadline=delivery_timeout.when())
                 else:
-                    await self._client.push(chat_id,messages)
+                    await self._push_with_retry(chat_id,messages,state,deadline=delivery_timeout.when())
         except Exception as exc:
             state['delivery'] = 'unknown'
             self._record_delivery(state)
@@ -452,6 +463,54 @@ class VideoLineAdapter(native.LineAdapter):
         state['delivery'] = 'delivered'
         self._record_delivery(state)
         return SendResult(success=True,message_id=state['binding']['turn_id'])
+
+    async def _push_once(self, chat_id, messages, retry_key):
+        # The pinned _LineClient.push cannot attach X-Line-Retry-Key, so issue the
+        # same POST through the client's own session/headers/timeout. HTTP
+        # rejections retain the native RuntimeError status prefix. Classify
+        # headers immediately: an unreadable error body must not change status.
+        client = self._client
+        async with client._session(client._timeout) as session:
+            async with session.post(native.LINE_PUSH_URL,
+                                    headers={**client._headers,'X-Line-Retry-Key':retry_key},
+                                    json={'to':chat_id,'messages':messages}) as resp:
+                if (200 <= resp.status < 300 or
+                        resp.status == 409 and resp.headers.get('x-line-accepted-request-id')):
+                    return
+                raise RuntimeError(f'LINE push {resp.status}')
+
+    async def _push_with_retry(self, chat_id, messages, state, *, deadline):
+        # Bounded same-key retries for ambiguous Push outcomes. Other 4xx are
+        # never retried, and the original delivery deadline remains in force.
+        attempt = 0
+        while True:
+            try:
+                remaining = deadline-time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError('video_delivery_deadline')
+                async with asyncio.timeout(remaining/(_PUSH_MAX_ATTEMPTS-attempt)):
+                    await self._push_once(chat_id,messages,state['retry_key'])
+                return
+            except Exception as exc:
+                attempt += 1
+                if attempt >= _PUSH_MAX_ATTEMPTS or not self._push_retryable(exc):
+                    raise
+                backoff = _PUSH_BACKOFF_S[min(attempt-1,len(_PUSH_BACKOFF_S)-1)]
+                if time.monotonic()+backoff >= deadline:
+                    raise
+                await asyncio.sleep(backoff)
+
+    @staticmethod
+    def _push_status(exc):
+        match = _PUSH_STATUS_RE.match(str(exc))
+        return int(match.group(1)) if match else None
+
+    @classmethod
+    def _push_retryable(cls, exc):
+        if isinstance(exc, _TRANSIENT_PUSH_ERRORS):
+            return True
+        status = cls._push_status(exc)
+        return status is not None and 500 <= status < 600
 
     def _record_delivery_attempt(self, input_binding, status, payload_sha256):
         try:
@@ -463,6 +522,7 @@ class VideoLineAdapter(native.LineAdapter):
     def _record_delivery(self, state):
         input_binding = state.get('input_binding')
         receipt = {'binding':state['binding'],'status':state['delivery'],
+                   'retry_key':state.get('retry_key',''),
                    'payload_sha256':state['approval']['payload_sha256'],'time':time.time()}
         if input_binding:
             receipt['input_binding'] = input_binding
