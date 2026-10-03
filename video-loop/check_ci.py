@@ -58,7 +58,9 @@ def main():
             receipt['checks'].append({'command':command,'exit_code':result.returncode,
                                       'stdout':result.stdout[-12000:],'stderr':result.stderr[-4000:]})
             save()
-            if result.returncode:raise RuntimeError('check_failed: '+command[0])
+            if result.returncode:
+                failed_check=next((Path(part).name for part in command[1:] if part.endswith(('.py','.sh'))),Path(command[0]).name)
+                raise RuntimeError(f'check_failed: {failed_check} exit={result.returncode}')
         subprocess.run(['git','diff','--exit-code','HEAD'],cwd=ROOT,check=True,capture_output=True)
         receipt['status']='PASS'
     except Exception as exc:
