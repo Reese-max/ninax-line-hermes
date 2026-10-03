@@ -605,7 +605,7 @@ def test_postback_from_wrong_chat_preserves_pending_answer_for_owner(tmp_path, m
     asyncio.run(adapter._handle_postback_event(wrong_owner))
     assert adapter._client.calls == [], 'a different chat must not receive the cached answer'
     assert adapter._cache.get(rid).state is plugin.native.State.READY, \
-        'a wrong-source tap must not consume the owner's pending response'
+        "a wrong-source tap must not consume the owner's pending response"
     assert adapter._pending_buttons[pending_key] == rid
     assert rid in adapter._reviewed_cache
 
