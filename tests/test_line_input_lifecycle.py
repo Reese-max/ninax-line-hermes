@@ -519,8 +519,13 @@ def test_dispatch_routes_message_edited_through_ledger_and_lifecycle(tmp_path, m
             calls.append(('release', event_id, owner))
 
     adapter._ledger = _Ledger()
+    # LINE messageEdited events are edits in group chats; their source may omit
+    # userId (the actor ID is only present on message events).
+    group_id = 'G' + '9' * 32
+    adapter.allow_all = False
+    adapter.allowed_groups = {group_id}
     event = _event('evt-edit', 1000, 'edited text', kind='messageEdited')
-    event['source'] = {'type': 'user', 'userId': 'U' + '9' * 31}
+    event['source'] = {'type': 'group', 'groupId': group_id}
     asyncio.run(adapter._dispatch_event(event))
     assert calls == [('reserve', 'evt-edit'), ('accept', 'evt-edit', 'owner')]
     receipt = json.loads(
