@@ -199,16 +199,40 @@ def check():
         assert rejected['status']=='failed' and rejected['metered_requests']==0
         import psutil
         child_file=root/'child.pid'
+        child_marker=f'ninax-test-child-{time.time_ns()}'
         script=('import subprocess,sys,time; from pathlib import Path; '
-                'p=subprocess.Popen([sys.executable,"-c","import time;time.sleep(30)"],start_new_session=True); '
-                f'Path({str(child_file)!r}).write_text(str(p.pid)); time.sleep(30)')
+                f'p=subprocess.Popen([sys.executable,"-c","import time;time.sleep(60)",{child_marker!r}],start_new_session=True); '
+                f'Path({str(child_file)!r}).write_text(str(p.pid)); time.sleep(60)')
+        outer=subprocess.Popen([sys.executable,'-c',script],stdin=subprocess.DEVNULL,
+                               stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,start_new_session=True)
+        child_pid=None
         try:
-            ev.run([sys.executable,'-c',script],time.monotonic()+1.5)
-            raise AssertionError('stage did not time out')
-        except TimeoutError:
-            pass
-        child_pid=int(child_file.read_text())
-        assert not psutil.pid_exists(child_pid) or psutil.Process(child_pid).status()==psutil.STATUS_ZOMBIE
+            ready_until=time.monotonic()+10
+            while not child_file.is_file() and time.monotonic()<ready_until:time.sleep(0.01)
+            assert child_file.is_file(),'nested child did not report readiness'
+            child_pid=int(child_file.read_text())
+            # Start the timeout clock only after the synthetic descendant exists.
+            with patch.object(subprocess,'Popen',return_value=outer):
+                try:
+                    ev.run([sys.executable,'-c',script],time.monotonic()+1.5)
+                    raise AssertionError('stage did not time out')
+                except TimeoutError:
+                    pass
+            try:
+                child_status=psutil.Process(child_pid).status()
+            except psutil.NoSuchProcess:
+                child_status=None
+            assert child_status in (None,psutil.STATUS_ZOMBIE),'timed-out nested child is still running'
+        finally:
+            # Never leave the synthetic subprocess behind if the assertion fails.
+            if child_pid is not None:
+                try:
+                    child=psutil.Process(child_pid)
+                    if child_marker in child.cmdline():child.kill()
+                except psutil.NoSuchProcess:
+                    pass
+            if outer.poll() is None:outer.kill()
+            outer.communicate()
     print(json.dumps({'gate':'video-evidence-and-budget','status':'PASS','checks':[
          'caption_is_not_complete','platform_and_case_identity','ready_cache_no_calls',
          'timestamp_validation','parallel_turn_ledgers','audit_missing_claims',
