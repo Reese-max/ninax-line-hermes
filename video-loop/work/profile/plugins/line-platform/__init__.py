@@ -304,7 +304,7 @@ class VideoLineAdapter(native.LineAdapter):
             if native._is_system_bypass(content):
                 return await native.LineAdapter._send_messages(self,chat_id,native._text_messages(content),text=True)
             return SendResult(success=False, error='unbound_video_delivery')
-        rid = self._pending_buttons.get(self._delivery_key(chat_id))
+        rid = self._pending_buttons.get(chat_id)
         deferred = bool(rid and not native._is_system_bypass(content))
         if deferred:
             self._reviewed_cache[rid] = (chat_id, digest(native._text_messages(content)), input_binding)
@@ -350,11 +350,9 @@ class VideoLineAdapter(native.LineAdapter):
         if not entry:
             return
         # Hermes RequestCache entries carry state/payload, not chat ownership.
-        # Bind the postback to the adapter's pending-button index instead; keys
-        # may be a plain chat id or the turn-scoped (chat_id, message_id) tuple.
+        # Bind the postback to Hermes' pending-button index (chat_id -> request_id).
         pending_chat = next(
-            (key[0] if isinstance(key, tuple) and key else key
-             for key, pending_rid in self._pending_buttons.items()
+            (owner for owner, pending_rid in self._pending_buttons.items()
              if pending_rid == rid),
             None,
         )
