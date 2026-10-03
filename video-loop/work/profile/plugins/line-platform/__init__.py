@@ -347,7 +347,18 @@ class VideoLineAdapter(native.LineAdapter):
         rid = data.get('request_id','')
         entry = self._cache.get(rid)
         chat_id, _ = native._resolve_chat(event.get('source') or {})
-        if not entry or entry.chat_id != chat_id:
+        if not entry:
+            return
+        # Hermes RequestCache entries carry state/payload, not chat ownership.
+        # Bind the postback to the adapter's pending-button index instead; keys
+        # may be a plain chat id or the turn-scoped (chat_id, message_id) tuple.
+        pending_chat = next(
+            (key[0] if isinstance(key, tuple) and key else key
+             for key, pending_rid in self._pending_buttons.items()
+             if pending_rid == rid),
+            None,
+        )
+        if pending_chat != chat_id:
             return
         reviewed = self._reviewed_cache.get(rid)
         input_binding = reviewed[2] if reviewed and len(reviewed) > 2 else None
