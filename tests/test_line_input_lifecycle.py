@@ -360,8 +360,8 @@ def test_postback_error_tap_records_no_answer_delivery(tmp_path, monkeypatch):
     store = adapter._input_lifecycle
     binding = _accepted(store, 'evt-1', 1000, 'slow question')
     adapter._client = _FakeClient()
-    rid = adapter._cache.register_pending(CHAT, delivery_key=(CHAT, 'm-1'))
-    adapter._pending_buttons[(CHAT, 'm-1')] = rid
+    rid = adapter._cache.register_pending(CHAT)
+    adapter._pending_buttons[CHAT] = rid
     adapter._reviewed_cache[rid] = (CHAT, 'b' * 64, binding)
     entry = adapter._cache.get(rid)
     entry.state = plugin.native.State.ERROR
@@ -544,9 +544,8 @@ def test_deferred_send_and_postback_delivery_follow_revision(tmp_path, monkeypat
     store = adapter._input_lifecycle
     binding = _accepted(store, 'evt-1', 1000, 'slow question')
     adapter._client = _FakeClient()
-    rid = adapter._cache.register_pending(CHAT, delivery_key=(CHAT, 'm-1'))
-    adapter._pending_buttons[(CHAT, 'm-1')] = rid
-    turn_token = adapter._delivery_turn.set((CHAT, 'm-1'))
+    rid = adapter._cache.register_pending(CHAT)
+    adapter._pending_buttons[CHAT] = rid
     input_token = plugin._INPUT.set(binding)
     try:
         result = asyncio.run(adapter.send(CHAT, 'deferred answer'))
@@ -556,7 +555,6 @@ def test_deferred_send_and_postback_delivery_follow_revision(tmp_path, monkeypat
         assert job['delivery']['status'] == 'NOT_ATTEMPTED', 'a cached payload was not delivered'
     finally:
         plugin._INPUT.reset(input_token)
-        adapter._delivery_turn.reset(turn_token)
     asyncio.run(adapter._handle_postback_event(_postback(rid)))
     assert adapter._client.calls == [('reply', 'tap', plugin.native._text_messages('deferred answer'))]
     job = json.loads(
@@ -570,15 +568,13 @@ def test_stale_postback_tap_is_rejected(tmp_path, monkeypatch):
     store = adapter._input_lifecycle
     binding = _accepted(store, 'evt-1', 1000, 'slow question')
     adapter._client = _FakeClient()
-    rid = adapter._cache.register_pending(CHAT, delivery_key=(CHAT, 'm-1'))
-    adapter._pending_buttons[(CHAT, 'm-1')] = rid
-    turn_token = adapter._delivery_turn.set((CHAT, 'm-1'))
+    rid = adapter._cache.register_pending(CHAT)
+    adapter._pending_buttons[CHAT] = rid
     input_token = plugin._INPUT.set(binding)
     try:
         asyncio.run(adapter.send(CHAT, 'deferred answer'))
     finally:
         plugin._INPUT.reset(input_token)
-        adapter._delivery_turn.reset(turn_token)
     store.accept(_event('evt-2', 2000, 'edited question', kind='messageEdited'), CHAT)
     asyncio.run(adapter._handle_postback_event(_postback(rid)))
     assert adapter._client.calls == [], 'a superseded cached answer must not be delivered'
@@ -592,8 +588,8 @@ def test_postback_from_wrong_chat_preserves_pending_answer_for_owner(tmp_path, m
     plugin, adapter = _plugin_adapter(tmp_path, monkeypatch)
     binding = _accepted(adapter._input_lifecycle, 'evt-1', 1000, 'slow question')
     adapter._client = _FakeClient()
-    rid = adapter._cache.register_pending(CHAT, delivery_key=(CHAT, 'm-1'))
-    pending_key = (CHAT, 'm-1')
+    rid = adapter._cache.register_pending(CHAT)
+    pending_key = CHAT
     adapter._pending_buttons[pending_key] = rid
     payload = 'reviewed answer'
     adapter._cache.set_ready(rid, payload)
