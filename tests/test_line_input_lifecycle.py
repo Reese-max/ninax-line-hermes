@@ -58,9 +58,45 @@ def _plugin_adapter(tmp_path, monkeypatch):
     return plugin, plugin.VideoLineAdapter(PlatformConfig(enabled=True))
 
 
+class _FakeResponse:
+    status = 200
+    headers = {}
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class _FakeSession:
+    def __init__(self, client):
+        self.client = client
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    def post(self, url, *, headers=None, json=None):
+        # Video-turn delivery uses the pinned client's session directly so it
+        # can attach X-Line-Retry-Key; retain the same observable push receipt.
+        self.client.calls.append(('push', json['to'], json['messages']))
+        return _FakeResponse()
+
+
 class _FakeClient:
     def __init__(self):
         self.calls = []
+        # Match the pinned Hermes _LineClient transport used by the keyed Push
+        # path while keeping this lifecycle test fully offline.
+        self._headers = {'Authorization': 'Bearer test-token',
+                         'Content-Type': 'application/json'}
+        self._timeout = 15.0
+
+    def _session(self, timeout):
+        return _FakeSession(self)
 
     async def reply(self, token, messages):
         self.calls.append(('reply', token, messages))
