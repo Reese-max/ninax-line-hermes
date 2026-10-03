@@ -50,11 +50,15 @@ jobs:
                       ['git','-C',str(root),'checkout','--detach','FETCH_HEAD']):
               subprocess.run(cmd,check=True)
           requirements=root/'ninax-requirements.txt'
-          requirements.write_text('\n'.join(k+'=='+v for k,v in lock['environments']['hermes']['packages'].items() if k!='hermes-agent')+'\npytest==9.1.1\npytest-asyncio==1.3.0\n')
+          requirements.write_text('\\n'.join(k+'=='+v for k,v in lock['environments']['hermes']['packages'].items() if k!='hermes-agent')+'\\npytest==9.1.1\\npytest-asyncio==1.3.0\\n')
           subprocess.run(['python','-m','pip','install','-r',str(requirements)],check=True)
           subprocess.run(['python','-m','pip','install','--no-deps','-e',str(root)],check=True)
           (root/'gateway/run_turn_runner.py').write_bytes(pathlib.Path('video-loop/work/hermes/gateway/run_turn_runner.py').read_bytes())
           PY
+      - name: Install FFmpeg for deterministic video fixture
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y ffmpeg
       - name: Source and delivery guards against native Hermes
         shell: bash
         run: python -B video-loop/check_ci.py hermes-contract --hermes "$RUNNER_TEMP/ninax-hermes" --out "$RUNNER_TEMP/hermes-contract.json"
