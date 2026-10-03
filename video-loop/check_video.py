@@ -208,7 +208,13 @@ def check():
         except TimeoutError:
             pass
         child_pid=int(child_file.read_text())
-        assert not psutil.pid_exists(child_pid) or psutil.Process(child_pid).status()==psutil.STATUS_ZOMBIE
+        try:
+            child_status=psutil.Process(child_pid).status()
+        except psutil.NoSuchProcess:
+            # The child may exit between status lookup and Process construction;
+            # that race means cleanup succeeded, not that the child survived.
+            child_status=None
+        assert child_status in (None,psutil.STATUS_ZOMBIE), 'timed-out nested child is still running'
     print(json.dumps({'gate':'video-evidence-and-budget','status':'PASS','checks':[
          'caption_is_not_complete','platform_and_case_identity','ready_cache_no_calls',
          'timestamp_validation','parallel_turn_ledgers','audit_missing_claims',
