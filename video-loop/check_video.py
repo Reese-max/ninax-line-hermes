@@ -19,6 +19,15 @@ import video_recovery as recovery
 import enrich_cached_video as enrich
 
 
+def assert_child_stopped(child_pid):
+    import psutil
+    try:
+        status=psutil.Process(child_pid).status()
+    except psutil.NoSuchProcess:
+        return  # A reaped child is already stopped.
+    assert status==psutil.STATUS_ZOMBIE,'nested child remains active after timeout'
+
+
 def check():
     with tempfile.TemporaryDirectory(prefix='ninax-check-') as directory:
         root = Path(directory)
@@ -283,7 +292,21 @@ def check():
         except TimeoutError:
             pass
         child_pid=int(child_file.read_text())
-        assert not psutil.pid_exists(child_pid) or psutil.Process(child_pid).status()==psutil.STATUS_ZOMBIE
+        assert_child_stopped(child_pid)
+        # A child can disappear during either part of the status observation.
+        with patch('psutil.Process',side_effect=psutil.NoSuchProcess(child_pid)):
+            assert_child_stopped(child_pid)
+        with patch('psutil.Process') as process:
+            process.return_value.status.side_effect=psutil.NoSuchProcess(child_pid)
+            assert_child_stopped(child_pid)
+        with patch('psutil.Process') as process:
+            process.return_value.status.return_value=psutil.STATUS_SLEEPING
+            try:
+                assert_child_stopped(child_pid)
+            except AssertionError:
+                pass
+            else:
+                raise AssertionError('a live nested child must fail the cleanup guard')
     print(json.dumps({'gate':'video-evidence-and-budget','status':'PASS','checks':[
          'caption_is_not_complete','platform_and_case_identity','ready_cache_no_calls',
          'timestamp_validation','parallel_turn_ledgers','audit_missing_claims',
