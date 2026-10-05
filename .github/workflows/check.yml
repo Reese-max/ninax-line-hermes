@@ -65,3 +65,15 @@ jobs:
       - name: Source and delivery guards against native Hermes
         shell: bash
         run: python -B video-loop/check_ci.py hermes-contract --hermes "$RUNNER_TEMP/ninax-hermes" --out "$RUNNER_TEMP/hermes-contract.json"
+      - name: Report bounded native check details
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os, pathlib
+          receipt=pathlib.Path(os.environ['RUNNER_TEMP'])/'hermes-contract.json'
+          if receipt.is_file():
+              result=json.loads(receipt.read_text())
+              for check in result.get('checks', []):
+                  print(json.dumps(check, ensure_ascii=False))
+          PY
