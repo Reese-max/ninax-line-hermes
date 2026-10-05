@@ -38,6 +38,13 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.11'
+      - name: Install native media fixture prerequisites
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes ffmpeg
+          ffmpeg -hide_banner -version
+          ffprobe -hide_banner -version
       - name: Restore pinned Hermes source and dependencies
         shell: bash
         run: |
@@ -58,3 +65,15 @@ jobs:
       - name: Source and delivery guards against native Hermes
         shell: bash
         run: python -B video-loop/check_ci.py hermes-contract --hermes "$RUNNER_TEMP/ninax-hermes" --out "$RUNNER_TEMP/hermes-contract.json"
+      - name: Report bounded native check details
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os, pathlib
+          receipt=pathlib.Path(os.environ['RUNNER_TEMP'])/'hermes-contract.json'
+          if receipt.is_file():
+              result=json.loads(receipt.read_text())
+              for check in result.get('checks', []):
+                  print(json.dumps(check, ensure_ascii=False))
+          PY

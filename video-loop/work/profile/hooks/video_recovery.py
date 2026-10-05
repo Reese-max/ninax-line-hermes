@@ -323,13 +323,83 @@ def recover_original(evidence, candidates, job, deadline, ledger):
 
 
 def metered_fetch(url, state_path, deadline, jobs_root):
-    """One single-URL async request. Uncertain acceptance is never retriggered."""
+    """One single-URL async request. Uncertain acceptance is never retriggered.
+
+    A provider POST additionally requires a one-shot grant already recorded in
+    the state receipt by authorize_metered_fetch; the kill-switch stays first.
+    """
     if os.environ.get('NINAX_DISABLE_METERED_FETCH')=='1':
         return {'ok':False,'reason':'metered_fetch_disabled'}
     state_path = Path(state_path)
     state_path.parent.mkdir(parents=True,exist_ok=True)
     with job_lock(state_path.parent,deadline,state_path.stem+'.lock'):
         return _metered_fetch(url,state_path,deadline,jobs_root)
+
+
+def authorize_metered_fetch(url, state_path, deadline, seconds=600):
+    """Record a positive one-shot authorization for this exact source in the receipt.
+
+    The grant binds the source identity, expires, and is consumed atomically
+    before any provider POST. An in-flight or ambiguous submission can never
+    be re-authorized, so an uncertain acceptance still cannot be retriggered.
+    """
+    if os.environ.get('NINAX_DISABLE_METERED_FETCH')=='1':
+        return {'ok':False,'reason':'metered_fetch_disabled'}
+    wanted = identity(url)
+    if not wanted or wanted['platform'] != 'instagram':
+        raise ValueError('metered_source_not_supported')
+    state_path = Path(state_path)
+    state_path.parent.mkdir(parents=True,exist_ok=True)
+    with job_lock(state_path.parent,deadline,state_path.stem+'.lock'):
+        state = read_json(state_path)
+        old_identity = identity(state.get('url') or '')
+        if state and (not old_identity or any(old_identity[k] != wanted[k] for k in ('platform','id'))):
+            raise ValueError('provider_request_identity_mismatch')
+        if (state.get('status') in {'starting', 'pending', 'submitted', 'unknown'}
+                or (state.get('remote_task_id') and state.get('status') not in {'failed', 'completed'})):
+            raise ValueError('metered_submission_in_progress')
+        if state.get('status') in {'failed', 'completed'}:
+            # Re-authorizing a finished task retires its receipt into history.
+            state = {'history': (state.get('history',[])+
+                     [{k:state.get(k) for k in ('backend','remote_task_id','status','started_at')}])[-20:]}
+        for stale in ('ok', 'status', 'reason', 'denied_at', 'metered_requests'):
+            state.pop(stale, None)  # A grant receipt awaits its fetch; stale outcomes mislead audits.
+        seconds = float(seconds)
+        if not math.isfinite(seconds):
+            raise ValueError('metered_authorization_invalid')
+        now = time.time()
+        grant = {'platform': wanted['platform'], 'id': wanted['id'], 'url': wanted['url'],
+                 'scope': 'single_metered_submission', 'authorized_at': now,
+                 'expires_at': now+max(1,seconds), 'consumed': False}
+        state.update(url=wanted['url'], authorization=grant)
+        atomic_json(state_path, state)
+        return {'ok': True, 'state': str(state_path), 'authorization': grant}
+
+
+def _authorization_denial(grant, wanted, now):
+    """A grant is positive only when scoped, unconsumed, in-window, and bound to this source."""
+    if not isinstance(grant, dict):
+        return 'metered_authorization_absent'
+    if grant.get('consumed'):
+        return 'metered_authorization_consumed'
+    if grant.get('scope') != 'single_metered_submission':
+        return 'metered_authorization_invalid'
+    granted = identity(grant.get('url') or '')
+    if (not granted or granted['platform'] != grant.get('platform') or granted['id'] != grant.get('id')
+            or any(granted[k] != wanted[k] for k in ('platform','id'))):
+        return 'metered_authorization_mismatch'
+    try:
+        authorized_at = float(grant['authorized_at'])
+        expires_at = float(grant['expires_at'])
+    except (KeyError, TypeError, ValueError):
+        return 'metered_authorization_invalid'
+    if not (math.isfinite(authorized_at) and math.isfinite(expires_at)):
+        return 'metered_authorization_invalid'
+    if not authorized_at <= now:
+        return 'metered_authorization_invalid'
+    if not now < expires_at:
+        return 'metered_authorization_expired'
+    return None
 
 
 def _metered_fetch(url, state_path, deadline, jobs_root):
@@ -346,17 +416,32 @@ def _metered_fetch(url, state_path, deadline, jobs_root):
     history = state.get('history',[])
     if state.get('status') in {'failed','completed'} and time.time()-state.get('started_at',time.time()) > 300:
         history = (history+[{k:state.get(k) for k in ('backend','remote_task_id','status','started_at')}])[-20:]
-        state = {}
+        grant = state.get('authorization')
+        state = {'history': history}
+        if isinstance(grant, dict):
+            state['authorization'] = grant
     if state.get('status') in {'starting', 'unknown', 'failed', 'completed'}:
         return {**state, 'resumed': True}
     backend = state.get('backend') or ('brightdata' if bright.token() else 'apify')
     tok = bright.token() if backend == 'brightdata' else apify.token()
     if not tok:
         return {'ok': False, 'reason': 'provider_not_configured'}
-    if not state:
-        state = {'url': wanted['url'], 'backend': backend, 'status': 'starting', 'started_at': time.time(),
-                 'metered_requests': 1, 'history':history}
-        atomic_json(state_path, state)  # A lost POST response must not create a second billable run.
+    if not state.get('remote_task_id'):
+        # A new submission needs a positive one-shot grant bound to this exact
+        # source; the missing kill-switch is never an approval.
+        denial = _authorization_denial(state.get('authorization'), wanted, time.time())
+        if denial:
+            state.update(ok=False, status='not_authorized', reason=denial, url=wanted['url'],
+                         metered_requests=0, denied_at=time.time())
+            atomic_json(state_path, state)
+            return state
+        state['authorization'].update(consumed=True, consumed_at=time.time())
+        for stale in ('ok', 'reason', 'denied_at'):
+            state.pop(stale, None)
+        state.update(url=wanted['url'], backend=backend, status='starting', started_at=time.time(),
+                     metered_requests=1, history=history)
+        atomic_json(state_path, state)  # Consume the grant and mark starting before any POST;
+                                        # a lost POST response must not create a second billable run.
         try:
             if backend == 'brightdata':
                 query = urlencode({'dataset_id': bright.DATASET_ID, 'include_errors': 'true', 'format': 'json'})
@@ -377,7 +462,7 @@ def _metered_fetch(url, state_path, deadline, jobs_root):
                          metered_requests=0 if rejected else 1)
             atomic_json(state_path,state)
             return state
-        state.update(remote_task_id=remote_id, status='pending' if remote_id else 'unknown')
+        state.update(remote_task_id=remote_id, status='submitted' if remote_id else 'unknown')
         atomic_json(state_path, state)
     remote_id = state.get('remote_task_id')
     if not remote_id:
@@ -424,11 +509,22 @@ def _same_record(item, wanted):
                 or (code and str(code) == wanted['id']))
 
 
+def _request_state_path(url, state_arg, jobs_root):
+    if state_arg:
+        return Path(state_arg)
+    wanted = identity(url or '')
+    if not wanted:
+        raise ValueError('unsupported_video_url')
+    return Path(jobs_root)/'.ninax-recovery'/(digest([wanted['platform'],wanted['id']])+'.json')
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--search')
     parser.add_argument('--resolve')
     parser.add_argument('--fetch')
+    parser.add_argument('--authorize')
+    parser.add_argument('--authorization-seconds', type=float, default=600)
     parser.add_argument('--refresh')
     parser.add_argument('--visual-match',action='store_true')
     parser.add_argument('--job')
@@ -445,8 +541,14 @@ if __name__ == '__main__':
             result = search_worker(args.search)
         elif args.refresh:
             result = {'ok': refresh_metadata(args.refresh, Path(args.job), time.monotonic()+args.seconds)}
+        elif args.authorize:
+            result = authorize_metered_fetch(args.authorize,
+                _request_state_path(args.authorize, args.state, args.jobs_root),
+                time.monotonic()+min(15,args.seconds), args.authorization_seconds)
         else:
-            result = metered_fetch(args.fetch, Path(args.state), time.monotonic()+args.seconds, args.jobs_root)
+            result = metered_fetch(args.fetch,
+                _request_state_path(args.fetch, args.state, args.jobs_root),
+                time.monotonic()+args.seconds, args.jobs_root)
         print(json.dumps(result, ensure_ascii=False))
     except Exception as exc:
         print(json.dumps({'ok': False, 'reason': type(exc).__name__}))
