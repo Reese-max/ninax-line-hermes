@@ -2,14 +2,14 @@
 
 NINAX 的 LINE 機器人修復與影片補查實作。影片資訊不足時，先核對來源與既有影音，再補查字幕、語音及畫面；摘要經獨立檢核後，才送出與本回合相符的 LINE 文字。
 
-本次 goal 的程式已部署，包含審稿回饋補查、長片分段與整合修訂、畫面比對、可重建環境、CI 與品質統計。短片流程及 5 分 45 秒長片的多回合續接檢核通過；見 [goal](video-loop/GOAL.md)、[驗證紀錄](video-loop/evidence/goal-verification.json)及 [重建與驗收](video-loop/OPERATIONS.md)。GitHub CI 被帳戶付款／支出上限擋住；手機實收及跨平台長版原片仍待驗收。稽核發現先前兩輪隔離測試在未取得單次授權時觸發 Bright Data 並完成，實際費用未知；已停止新增計費驗收，修正測試邊界及紀錄。
+本次 goal 的程式已部署，包含審稿回饋補查、長片分段與整合修訂、畫面比對、可重建環境、CI 與品質統計。LINE 輸入另有版本化生命週期：`messageEdited` 與 webhook 重送會建立持久收據與修訂 head，同一 `webhookEventId` 不重複啟動工作，被取代的舊修訂無法通過傳送閘門，重啟後由磁碟收據恢復 dedupe 與 pending delivery 狀態。短片流程及 5 分 45 秒長片的多回合續接檢核通過；見 [goal](video-loop/GOAL.md)、[驗證紀錄](video-loop/evidence/goal-verification.json)及 [重建與驗收](video-loop/OPERATIONS.md)。GitHub CI 被帳戶付款／支出上限擋住；手機實收及跨平台長版原片仍待驗收。稽核發現先前兩輪隔離測試在未取得單次授權時觸發 Bright Data 並完成，實際費用未知；已停止新增計費驗收，修正測試邊界及紀錄。
 
 ## 檔案
 
 - [補查規劃](VIDEO-SECOND-PASS-PLAN.md)、[實作迴圈](video-loop/LOOP.md)及 [版本與驗證證據](video-loop/evidence/release-evidence.json)。
 - `video-loop/work/profile/`：正式影片 helper、LINE 平台外掛與操作 skill；包含既有 Bright Data／Apify helper 相依程式。
 - `video-loop/work/hermes/gateway/run_turn_runner.py`：套用通用平台回合入口的 Hermes 檔案；[差異補丁](video-loop/evidence/hermes-core.patch)以 Hermes `13e72fb205b735df679e0fd5f5996a34ac4accc6` 為基準。
-- `video-loop/check_*.py`、`test_custom_turn.py`：來源、預算、審稿、傳送與 gateway 檢查。
+- `video-loop/check_*.py`、`test_custom_turn.py`、`tests/test_line_input_lifecycle.py`：來源、預算、審稿、傳送、gateway 與 LINE 輸入版本化檢查。
 - `video-loop/deploy.py`、`update_helpers.py`、`production_check.py`：本次主機的部署、更新、回復與唯讀驗證工具。
 - `work/gate-e/`：前一輪修正的 writer guard 與啟動設定；背景見 [基礎修復紀錄](REPAIR-REPORT.md)。
 

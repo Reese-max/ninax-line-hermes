@@ -283,16 +283,36 @@ def check():
                 assert recovery.metered_fetch(url,granted,time.monotonic()+5,root)=={'ok':False,'reason':'metered_fetch_disabled'}
         import psutil
         child_file=root/'child.pid'
+        child_marker=f'ninax-test-child-{time.time_ns()}'
         script=('import subprocess,sys,time; from pathlib import Path; '
-                'p=subprocess.Popen([sys.executable,"-c","import time;time.sleep(30)"],start_new_session=True); '
-                f'Path({str(child_file)!r}).write_text(str(p.pid)); time.sleep(30)')
+                f'p=subprocess.Popen([sys.executable,"-c","import time;time.sleep(60)",{child_marker!r}],start_new_session=True); '
+                f'Path({str(child_file)!r}).write_text(str(p.pid)); time.sleep(60)')
+        outer=subprocess.Popen([sys.executable,'-c',script],stdin=subprocess.DEVNULL,
+                               stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,start_new_session=True)
+        child_pid=None
         try:
-            ev.run([sys.executable,'-c',script],time.monotonic()+1.5)
-            raise AssertionError('stage did not time out')
-        except TimeoutError:
-            pass
-        child_pid=int(child_file.read_text())
-        assert_child_stopped(child_pid)
+            ready_until=time.monotonic()+10
+            while not child_file.is_file() and time.monotonic()<ready_until:time.sleep(0.01)
+            assert child_file.is_file(),'nested child did not report readiness'
+            child_pid=int(child_file.read_text())
+            # Start the timeout clock only after the synthetic descendant exists.
+            with patch.object(subprocess,'Popen',return_value=outer):
+                try:
+                    ev.run([sys.executable,'-c',script],time.monotonic()+1.5)
+                    raise AssertionError('stage did not time out')
+                except TimeoutError:
+                    pass
+            assert_child_stopped(child_pid)
+        finally:
+            # Never leave the synthetic subprocess behind if the assertion fails.
+            if child_pid is not None:
+                try:
+                    child=psutil.Process(child_pid)
+                    if child_marker in child.cmdline():child.kill()
+                except psutil.NoSuchProcess:
+                    pass
+            if outer.poll() is None:outer.kill()
+            outer.communicate()
         # A child can disappear during either part of the status observation.
         with patch('psutil.Process',side_effect=psutil.NoSuchProcess(child_pid)):
             assert_child_stopped(child_pid)

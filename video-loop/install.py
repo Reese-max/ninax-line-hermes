@@ -59,7 +59,7 @@ def build_plan(profile,hermes,settings,baseline=None):
         # Only the published package belongs to the installation; never copy .env or bytecode.
         names=(['video_evidence.py','video_review.py','video_recovery.py','video_workflow.py',
                 'video_takeaway_cascade.py','enrich_cached_video.py','brightdata_ig_fallback.py','apify_ig_fallback.py']
-               if folder=='hooks' else ['plugin.yaml','__init__.py','README.md'] if folder.startswith('plugins') else ['SKILL.md'])
+               if folder=='hooks' else ['plugin.yaml','__init__.py','line_input_lifecycle.py','README.md'] if folder.startswith('plugins') else ['SKILL.md'])
         for name in names:
             target=profile/folder/name
             data=(source/name).read_bytes()
