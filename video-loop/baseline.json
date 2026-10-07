@@ -31,6 +31,9 @@
       "sha256": "5b37e9b03a688185844707d6778d184a53f05904f65b9c0a5be90e78002e344e",
       "remote": "/home/box/irisx-failover-restore/20260906/profile-irisx/hooks/brightdata_ig_fallback.py"
     },
+    "hermes/plugins/platforms/line/adapter.py": {
+      "sha256": "a8f1b6c7a63b43137656d8c20b20c8f69c1a7829b476630795bde079f0692fcf"
+    },
     "hermes/gateway/run_turn_runner.py": {
       "sha256": "c2473f80b43a6af54ce6da3d26bc811d0224991beb4853e7dc14ff6ad73be180",
       "remote": "/home/box/.hermes/hermes-agent/gateway/run_turn_runner.py"

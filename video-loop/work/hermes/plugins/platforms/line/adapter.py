@@ -246,6 +246,13 @@ class _LineClient:
         merged = {**self._headers, **(headers or {})}
         async with self._session(self._timeout) as session:
             async with session.post(url, headers=merged, json=payload) as resp:
+                if label == "push" and headers and headers.get("X-Line-Retry-Key"):
+                    # Acceptance is in the status/headers; an unreadable error body
+                    # must not turn a definite 4xx into a retryable timeout.
+                    if (200 <= resp.status < 300 or
+                            resp.status == 409 and resp.headers.get("x-line-accepted-request-id")):
+                        return
+                    raise RuntimeError(f"LINE push {resp.status}")
                 if resp.status >= 400:
                     body = await resp.text()
                     raise RuntimeError(f"LINE {label} {resp.status}: {body[:200]}")

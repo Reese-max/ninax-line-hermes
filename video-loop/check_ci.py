@@ -38,12 +38,13 @@ def main():
         hermes=args.hermes.resolve()
         lock=json.loads((BASE/'runtime-lock.json').read_text())
         assert subprocess.check_output(['git','rev-parse','HEAD'],cwd=hermes,text=True).strip()==lock['hermes']['commit']
-        assert (hermes/'gateway/run_turn_runner.py').read_bytes()==(BASE/'work/hermes/gateway/run_turn_runner.py').read_bytes()
+        for name in ('gateway/run_turn_runner.py','plugins/platforms/line/adapter.py'):
+            assert (hermes/name).read_bytes()==(BASE/'work/hermes'/name).read_bytes()
         commands=[(ROOT,[sys.executable,'-B','video-loop/check_video.py',str(hermes)]),
                   (ROOT,[sys.executable,'-B','video-loop/check_delivery.py',str(hermes)]),
                   (hermes,['bash','scripts/run_tests.sh','-j','2','tests/gateway/test_line_plugin.py',
                     'tests/gateway/test_stream_final_contract.py','tests/gateway/test_stream_final_adoption_gate.py',
-                    str(BASE/'test_custom_turn.py'),'-q'])]
+                    str(BASE/'test_custom_turn.py'),str(ROOT/'tests/test_line_input_lifecycle.py'),str(ROOT/'tests/test_line_push_retry.py'),'-q'])]
     receipt={'group':args.group,'status':'RUNNING','commit':revision,'platform':platform.platform(),
              'python':platform.python_version(),'runner_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
              'started_at':datetime.now(timezone.utc).isoformat(),'metered_fetch_disabled':True,'checks':[]}
@@ -58,7 +59,18 @@ def main():
             receipt['checks'].append({'command':command,'exit_code':result.returncode,
                                       'stdout':result.stdout[-12000:],'stderr':result.stderr[-4000:]})
             save()
-            if result.returncode:raise RuntimeError('check_failed: '+command[0])
+            if result.returncode:
+                failed_check=next((Path(part).name for part in command[1:] if part.endswith(('.py','.sh'))),Path(command[0]).name)
+                frames=[line.strip() for line in result.stderr.splitlines() if line.lstrip().startswith('File "')]
+                caller=next((line for line in reversed(frames) if 'subprocess.py' not in line),
+                            frames[-1] if frames else '')
+                failures=[line.strip() for line in result.stderr.splitlines()
+                          if line.lstrip().startswith(('AssertionError','ModuleNotFoundError','ImportError',
+                                                       'ValueError','RuntimeError','TimeoutError','FileNotFoundError',
+                                                       'PermissionError','OSError','CalledProcessError'))]
+                details=' '.join(part for part in (caller,
+                                                   failures[-1].split(':',1)[0] if failures else '') if part)
+                raise RuntimeError(f'check_failed: {failed_check} exit={result.returncode} {details}'.rstrip())
         subprocess.run(['git','diff','--exit-code','HEAD'],cwd=ROOT,check=True,capture_output=True)
         receipt['status']='PASS'
     except Exception as exc:

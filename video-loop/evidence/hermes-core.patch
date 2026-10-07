@@ -1,8 +1,7 @@
 diff --git a/gateway/run_turn_runner.py b/gateway/run_turn_runner.py
-index 6449454..0518645 100644
 --- a/gateway/run_turn_runner.py
 +++ b/gateway/run_turn_runner.py
-@@ -1608,6 +1608,16 @@ class TurnRunner:
+@@ -1608,6 +1608,16 @@
          from gateway.run import _current_max_iterations, _normalize_empty_agent_response, _sanitize_gateway_final_response
          ctx = self._ctx
          runner = self._runner
@@ -20,10 +19,9 @@ index 6449454..0518645 100644
          # session_key is propagated via contextvars in _set_session_env() (_SESSION_KEY) and via
          # set_current_session_key() (_approval_session_key) below — both concurrency-safe and inherited by
 diff --git a/plugins/platforms/line/adapter.py b/plugins/platforms/line/adapter.py
-index 42237b9..8dd30c4 100644
 --- a/plugins/platforms/line/adapter.py
 +++ b/plugins/platforms/line/adapter.py
-@@ -242,9 +242,10 @@ class _LineClient:
+@@ -242,9 +242,17 @@
          import aiohttp
          return aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=timeout), trust_env=gateway_trust_env())
  
@@ -33,10 +31,17 @@ index 42237b9..8dd30c4 100644
          async with self._session(self._timeout) as session:
 -            async with session.post(url, headers=self._headers, json=payload) as resp:
 +            async with session.post(url, headers=merged, json=payload) as resp:
++                if label == "push" and headers and headers.get("X-Line-Retry-Key"):
++                    # Acceptance is in the status/headers; an unreadable error body
++                    # must not turn a definite 4xx into a retryable timeout.
++                    if (200 <= resp.status < 300 or
++                            resp.status == 409 and resp.headers.get("x-line-accepted-request-id")):
++                        return
++                    raise RuntimeError(f"LINE push {resp.status}")
                  if resp.status >= 400:
                      body = await resp.text()
                      raise RuntimeError(f"LINE {label} {resp.status}: {body[:200]}")
-@@ -252,8 +253,9 @@ class _LineClient:
+@@ -252,8 +260,9 @@
      async def reply(self, reply_token: str, messages: List[Dict[str, Any]]) -> None:
          await self._post_messages(LINE_REPLY_URL, "reply", {"replyToken": reply_token, "messages": messages})
  
