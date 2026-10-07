@@ -28,6 +28,7 @@ _TURN = contextvars.ContextVar('ninax_video_delivery', default=None)
 _INPUT = contextvars.ContextVar('ninax_line_input', default=None)
 _PUSH_STATUS_RE = re.compile(r'LINE push (\d{3})')
 _PUSH_MAX_ATTEMPTS = 3
+_PUSH_ATTEMPT_TIMEOUT_S = 15.0
 _PUSH_BACKOFF_S = (0.5, 1.0)
 try:
     import aiohttp as _aiohttp
@@ -442,7 +443,9 @@ class VideoLineAdapter(native.LineAdapter):
         token = owned_token if time.time()<state.get('reply_expires',0) else ''
         used_reply = bool(token)
         try:
-            remaining = min(10,state.get('deadline',time.monotonic()+10)-time.monotonic())
+            # Leave room for the native 15s timeout and all bounded Push attempts.
+            budget = _PUSH_MAX_ATTEMPTS*_PUSH_ATTEMPT_TIMEOUT_S+sum(_PUSH_BACKOFF_S)+1
+            remaining = min(budget,state.get('deadline',time.monotonic()+budget)-time.monotonic())
             if remaining<=0:
                 raise TimeoutError('video_delivery_deadline')
             async with asyncio.timeout(remaining) as delivery_timeout:
@@ -465,19 +468,9 @@ class VideoLineAdapter(native.LineAdapter):
         return SendResult(success=True,message_id=state['binding']['turn_id'])
 
     async def _push_once(self, chat_id, messages, retry_key):
-        # The pinned _LineClient.push cannot attach X-Line-Retry-Key, so issue the
-        # same POST through the client's own session/headers/timeout. HTTP
-        # rejections retain the native RuntimeError status prefix. Classify
-        # headers immediately: an unreadable error body must not change status.
-        client = self._client
-        async with client._session(client._timeout) as session:
-            async with session.post(native.LINE_PUSH_URL,
-                                    headers={**client._headers,'X-Line-Retry-Key':retry_key},
-                                    json={'to':chat_id,'messages':messages}) as resp:
-                if (200 <= resp.status < 300 or
-                        resp.status == 409 and resp.headers.get('x-line-accepted-request-id')):
-                    return
-                raise RuntimeError(f'LINE push {resp.status}')
+        # Installation and CI restore the retry-capable native client. An old
+        # two-argument client raises TypeError before any unkeyed request.
+        await self._client.push(chat_id,messages,retry_key=retry_key)
 
     async def _push_with_retry(self, chat_id, messages, state, *, deadline):
         # Bounded same-key retries for ambiguous Push outcomes. Other 4xx are
@@ -488,7 +481,7 @@ class VideoLineAdapter(native.LineAdapter):
                 remaining = deadline-time.monotonic()
                 if remaining <= 0:
                     raise TimeoutError('video_delivery_deadline')
-                async with asyncio.timeout(remaining/(_PUSH_MAX_ATTEMPTS-attempt)):
+                async with asyncio.timeout(min(_PUSH_ATTEMPT_TIMEOUT_S,remaining/(_PUSH_MAX_ATTEMPTS-attempt))):
                     await self._push_once(chat_id,messages,state['retry_key'])
                 return
             except Exception as exc:

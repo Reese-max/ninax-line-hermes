@@ -19,6 +19,8 @@ from uuid import UUID
 
 import pytest
 
+from plugins.platforms.line.adapter import _LineClient
+
 ROOT = Path(__file__).resolve().parents[1]
 PROFILE = ROOT / 'video-loop' / 'work' / 'profile'
 PLUGIN_PATH = PROFILE / 'plugins' / 'line-platform' / '__init__.py'
@@ -63,7 +65,7 @@ class _Session:
         return outcome
 
 
-class Client:
+class Client(_LineClient):
     """Fake LINE client shaped like the pinned ``_LineClient`` transport."""
 
     def __init__(self):
@@ -72,8 +74,7 @@ class Client:
         self.replies = []
         self.reply_error = None
         self.legacy_pushes = []
-        self._headers = {'Authorization': 'Bearer test-token', 'Content-Type': 'application/json'}
-        self._timeout = 15.0
+        super().__init__('test-token')
 
     def _session(self, timeout):
         return _Session(self)
@@ -82,10 +83,6 @@ class Client:
         self.replies.append((token, messages))
         if self.reply_error:
             raise self.reply_error
-
-    async def push(self, chat, messages):
-        # Unkeyed transport (the pinned client shape): never carries a retry key.
-        self.legacy_pushes.append((chat, messages))
 
 
 @pytest.fixture
@@ -315,9 +312,10 @@ def test_review_ci_runs_push_retry_regressions(tmp_path, monkeypatch):
     ci = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(ci)
     hermes = tmp_path / 'hermes'
-    (hermes / 'gateway').mkdir(parents=True)
-    shutil.copyfile(ROOT / 'video-loop/work/hermes/gateway/run_turn_runner.py',
-                    hermes / 'gateway/run_turn_runner.py')
+    for name in ('gateway/run_turn_runner.py', 'plugins/platforms/line/adapter.py'):
+        target = hermes / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / 'video-loop/work/hermes' / name, target)
     lock = json.loads((ROOT / 'video-loop/runtime-lock.json').read_text())
     monkeypatch.setattr(ci.sys, 'argv', ['check_ci.py', 'hermes-contract', '--hermes', str(hermes),
                                       '--out', str(tmp_path / 'receipt.json')])
@@ -333,3 +331,139 @@ def test_review_ci_runs_push_retry_regressions(tmp_path, monkeypatch):
     monkeypatch.setattr(ci.subprocess, 'run', run)
     assert ci.main() == 0
     assert any(str(Path(__file__).resolve()) in command for command in commands), commands
+
+
+@pytest.mark.parametrize('status', [401, 403, 404, 429])
+def test_other_nonretryable_4xx(rig, status):
+    plugin, adapter, client, home = rig
+    client.plan = [_Resp(status), _Resp(200)]
+    assert not _send(plugin, adapter, _state(plugin, home, 'reject-' + str(status))).success
+    assert len(client.posts) == 1
+
+
+def test_native_15_second_timeout_reaches_keyed_retry(rig):
+    plugin, adapter, client, home = rig
+
+    class DelayedTimeout(_Resp):
+        async def __aenter__(self):
+            # A real pending transport, not an immediately raised mock exception.
+            # The native timeout must get its full 15s before a keyed retry starts.
+            async with asyncio.timeout(client._timeout):
+                await asyncio.sleep(client._timeout + 1)
+
+    state = _state(plugin, home, 'native-delayed-timeout', deadline=time.monotonic() + 60)
+    client.plan = [DelayedTimeout(200), _Resp(200)]
+    started = time.monotonic()
+    assert _send(plugin, adapter, state).success
+    elapsed = time.monotonic() - started
+    assert elapsed >= client._timeout and elapsed < 25
+    assert len(client.posts) == 2 and len(set(_keys(client))) == 1
+    assert client.posts[0]['json'] == client.posts[1]['json']
+
+
+def test_hung_attempts_stop_at_turn_deadline(rig, monkeypatch):
+    plugin, adapter, client, home = rig
+    monkeypatch.setattr(plugin, '_PUSH_BACKOFF_S', (0, 0))
+
+    class HungResponse(_Resp):
+        async def __aenter__(self):
+            await asyncio.Future()
+
+    client.plan = [HungResponse(200)] * 10
+    started = time.monotonic()
+    state = _state(plugin, home, 'all-hung', deadline=started + 0.6)
+    assert not _send(plugin, adapter, state).success
+    assert time.monotonic() - started < 1.5
+    assert 1 < len(client.posts) <= 3 and len(set(_keys(client))) == 1
+    assert state['delivery'] == 'unknown'
+
+
+@pytest.mark.parametrize('error', [RuntimeError('LINE reply 500: unavailable'), TimeoutError('reply stalled')])
+def test_ambiguous_reply_never_uses_push_key(rig, error):
+    plugin, adapter, client, home = rig
+    state = _state(plugin, home, 'reply-failed', reply_token='owned', reply_expires=time.time() + 30)
+    client.reply_error = error
+    assert not _send(plugin, adapter, state).success
+    assert len(client.replies) == 1 and not client.posts
+
+
+def test_legacy_native_push_fails_before_transport(rig):
+    plugin, adapter, client, home = rig
+
+    class LegacyClient:
+        def __init__(self):
+            self.calls = []
+
+        async def push(self, chat, messages):
+            self.calls.append((chat, messages))
+
+    legacy = LegacyClient()
+    adapter._client = legacy
+    assert not _send(plugin, adapter, _state(plugin, home, 'legacy-native')).success
+    assert not legacy.calls
+
+
+def test_install_update_and_rollback_native_adapter(tmp_path, monkeypatch):
+    sys.path.insert(0, str(ROOT / 'video-loop'))
+    import install
+
+    # Clone only the pinned local fixture; no provider, LINE or remote Git access.
+    pinned = Path(sys.modules[_LineClient.__module__].__file__).resolve().parents[3]
+    hermes = tmp_path / 'hermes'
+    subprocess.run(['git', 'clone', '--shared', '--quiet', str(pinned), str(hermes)], check=True)
+    native_path = hermes / 'plugins/platforms/line/adapter.py'
+    original = native_path.read_bytes()
+    profile = tmp_path / 'profile'
+    settings = {'hermes_root': str(hermes), 'pipeline_root': str(tmp_path / 'pipeline'),
+                'pipeline_command': str(profile / 'bin/video-pipeline'),
+                'stt_python': str(tmp_path / 'stt/bin/python'), 'jobs_root': str(tmp_path / 'jobs'),
+                'provider_env_files': [str(profile / '.env')]}
+    published = install.BASE
+    prior_package = tmp_path / 'prior-package'
+    shutil.copytree(published, prior_package)
+    # A self-contained prior package works with CI's shallow repository checkout.
+    prior_native = (prior_package / 'work/hermes/plugins/platforms/line/adapter.py').read_bytes() + b'\n# prior packaged revision\n'
+    (prior_package / 'work/hermes/plugins/platforms/line/adapter.py').write_bytes(prior_native)
+    monkeypatch.setattr(install, 'BASE', prior_package)
+    native_path.unlink()
+    with pytest.raises(ValueError, match='unsupported_hermes_core'):
+        install.build_plan(profile, hermes, settings)
+    native_path.write_bytes(original)
+    first_plan = install.build_plan(profile, hermes, settings)
+    assert str(native_path) in {row['path'] for row in first_plan}
+    first_receipt = tmp_path / 'install.json'
+    first = install.apply(first_plan, first_receipt)
+    assert native_path.read_bytes() == prior_native
+    assert install.build_plan(profile, hermes, settings, first) == []
+
+    monkeypatch.setattr(install, 'BASE', published)
+    update_plan = install.build_plan(profile, hermes, settings, first)
+    assert {row['path'] for row in update_plan} == {str(native_path)}
+    update_receipt = tmp_path / 'update.json'
+    updated = install.apply(update_plan, update_receipt)
+    assert install.build_plan(profile, hermes, settings, updated) == []
+
+    # Load the adapter actually installed by build_plan, not the source snapshot.
+    spec = importlib.util.spec_from_file_location('ninax_installed_native', native_path)
+    installed = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = installed
+    spec.loader.exec_module(installed)
+    transport = Client()
+    real_client = installed._LineClient('fake-token')
+    real_client._session = transport._session
+    key = '123e4567-e89b-12d3-a456-426614174000'
+    asyncio.run(real_client.push('U_test', [{'type': 'text', 'text': 'approved'}], retry_key=key))
+    assert _keys(transport) == [key]
+
+    packaged_bytes = native_path.read_bytes()
+    native_path.write_bytes(packaged_bytes + b'\n# unrecorded drift\n')
+    with pytest.raises(ValueError, match='rollback_refuses_drift'):
+        install.rollback(update_receipt)
+    with pytest.raises(ValueError, match='unsupported_hermes_core'):
+        install.build_plan(profile, hermes, settings, updated)
+    native_path.write_bytes(packaged_bytes)
+    install.rollback(update_receipt)
+    assert native_path.read_bytes() == prior_native
+    install.rollback(first_receipt)
+    assert native_path.read_bytes() == original
+    assert not (profile / 'plugins/line-platform/__init__.py').exists()

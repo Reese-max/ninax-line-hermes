@@ -9,6 +9,7 @@ NINAX 的 LINE 機器人修復與影片補查實作。影片資訊不足時，�
 - [補查規劃](VIDEO-SECOND-PASS-PLAN.md)、[實作迴圈](video-loop/LOOP.md)及 [版本與驗證證據](video-loop/evidence/release-evidence.json)。
 - `video-loop/work/profile/`：正式影片 helper、LINE 平台外掛與操作 skill；包含既有 Bright Data／Apify helper 相依程式。
 - `video-loop/work/hermes/gateway/run_turn_runner.py`：套用通用平台回合入口的 Hermes 檔案；[差異補丁](video-loop/evidence/hermes-core.patch)以 Hermes `13e72fb205b735df679e0fd5f5996a34ac4accc6` 為基準。
+- `video-loop/work/hermes/plugins/platforms/line/adapter.py`：為 `_LineClient.push()` 加上 `X-Line-Retry-Key` 的 Hermes 檔案（同一差異補丁）；安裝器與 CI 會套用並核對此檔案。
 - `video-loop/check_*.py`、`test_custom_turn.py`、`tests/test_line_input_lifecycle.py`：來源、預算、審稿、傳送、gateway 與 LINE 輸入版本化檢查。
 - `video-loop/deploy.py`、`update_helpers.py`、`production_check.py`：本次主機的部署、更新、回復與唯讀驗證工具。
 - `work/gate-e/`：前一輪修正的 writer guard 與啟動設定；背景見 [基礎修復紀錄](REPAIR-REPORT.md)。

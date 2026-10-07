@@ -38,7 +38,8 @@ def main():
         hermes=args.hermes.resolve()
         lock=json.loads((BASE/'runtime-lock.json').read_text())
         assert subprocess.check_output(['git','rev-parse','HEAD'],cwd=hermes,text=True).strip()==lock['hermes']['commit']
-        assert (hermes/'gateway/run_turn_runner.py').read_bytes()==(BASE/'work/hermes/gateway/run_turn_runner.py').read_bytes()
+        for name in ('gateway/run_turn_runner.py','plugins/platforms/line/adapter.py'):
+            assert (hermes/name).read_bytes()==(BASE/'work/hermes'/name).read_bytes()
         commands=[(ROOT,[sys.executable,'-B','video-loop/check_video.py',str(hermes)]),
                   (ROOT,[sys.executable,'-B','video-loop/check_delivery.py',str(hermes)]),
                   (hermes,['bash','scripts/run_tests.sh','-j','2','tests/gateway/test_line_plugin.py',

@@ -33,7 +33,7 @@ python video-loop/install.py --profile /srv/ninax/profile \
 python video-loop/install.py --rollback /srv/ninax/update-receipt.json
 ```
 
-安裝器拒絕未知 Hermes commit、核心差異、未記錄的 helper 修改與符號連結越界。所有舊檔的日期備份及 prepared 收據會先落盤，再更新檔案。回復先核對全部檔案及備份；有其他修改就拒絕還原。新檔移到帶日期的保留名稱，未完成的更新也能回復。再次安裝同一版應為零差異。
+安裝器拒絕未知 Hermes commit、核心差異、未記錄的 helper 修改與符號連結越界。安裝計畫包含 Hermes 的回合入口及支援 retry key 的原生 LINE adapter；兩者都核對固定來源或上一份收據。所有舊檔的日期備份及 prepared 收據會先落盤，再更新檔案。回復先核對全部檔案及備份；有其他修改就拒絕還原。新檔移到帶日期的保留名稱，未完成的更新也能回復。再次安裝同一版應為零差異。
 
 更新 LINE 外掛後，由既有 supervisor 對精確的 gateway PID 進行正常停止與重啟；不要啟動第二個 writer。原主機仍使用 `production_check.py` 檢查 guard、lease generation、正式 webhook 與 Bot 名稱。這些只證明服務連通，不能代替手機收件。
 

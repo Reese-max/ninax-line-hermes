@@ -34,7 +34,7 @@ async def check():
             async def reply(self,token,messages):
                 self.calls.append(('reply',token,messages))
                 if self.ambiguous:raise TimeoutError('accepted but acknowledgement lost')
-            async def push(self,chat,messages):self.calls.append(('push',chat,messages))
+            async def push(self,chat,messages,*,retry_key=None):self.calls.append(('push',chat,messages))
         client=Client();adapter._client=client
         counter=[0]
         def state(turn):

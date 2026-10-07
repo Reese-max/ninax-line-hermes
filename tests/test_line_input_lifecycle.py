@@ -101,7 +101,7 @@ class _FakeClient:
     async def reply(self, token, messages):
         self.calls.append(('reply', token, messages))
 
-    async def push(self, chat, messages):
+    async def push(self, chat, messages, *, retry_key=None):
         self.calls.append(('push', chat, messages))
 
 

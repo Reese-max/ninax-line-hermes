@@ -48,12 +48,18 @@ def build_plan(profile,hermes,settings,baseline=None):
     if not isinstance(settings['provider_env_files'],list) or any(not Path(p).is_absolute() for p in settings['provider_env_files']):
         raise ValueError('invalid_provider_env_paths')
     old={r['path']:r['after_sha256'] for r in (baseline or {}).get('files',[])}
-    core=hermes/'gateway/run_turn_runner.py'
-    original=json.loads((BASE/'baseline.json').read_text())['files']['hermes/gateway/run_turn_runner.py']['sha256']
-    packaged=BASE/'work/hermes/gateway/run_turn_runner.py'
-    if sha(core) not in {original,sha(packaged)}:
-        raise ValueError('unsupported_hermes_core')
-    updates=[(core,packaged.read_bytes(),0o644)]
+    originals=json.loads((BASE/'baseline.json').read_text())['files']
+    updates=[]
+    for name in ('gateway/run_turn_runner.py','plugins/platforms/line/adapter.py'):
+        core=hermes/name
+        packaged=BASE/'work/hermes'/name
+        original=originals['hermes/'+name]['sha256']
+        allowed={original,sha(packaged)}
+        if old.get(str(core)):
+            allowed.add(old[str(core)])
+        if not core.is_file() or sha(core) not in allowed:
+            raise ValueError('unsupported_hermes_core')
+        updates.append((core,packaged.read_bytes(),0o644))
     for folder in ('hooks','plugins/line-platform','skills/media/video-timeline-pipeline'):
         source=BASE/'work/profile'/folder
         # Only the published package belongs to the installation; never copy .env or bytecode.
