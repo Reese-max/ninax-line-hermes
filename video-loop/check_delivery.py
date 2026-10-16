@@ -34,12 +34,22 @@ async def check():
             async def reply(self,token,messages):
                 self.calls.append(('reply',token,messages))
                 if self.ambiguous:raise TimeoutError('accepted but acknowledgement lost')
-            async def push(self,chat,messages):self.calls.append(('push',chat,messages))
+            async def push(self,chat,messages,*,retry_key=None):self.calls.append(('push',chat,messages))
         client=Client();adapter._client=client
+        counter=[0]
         def state(turn):
-            binding={'profile':str(home),'session_id':'session','session_key':'line:test','turn_id':turn}
-            return {'chat_id':'U_test','message_id':turn,'binding':binding,'delivery':'pending',
-                    'reply_token':'token-'+turn,'reply_expires':time.time()+30,
+            # Every revision-bound turn starts from a real accepted input receipt.
+            counter[0]+=1
+            nonce=turn+'-'+str(counter[0])
+            event={'type':'message','webhookEventId':'evt-'+nonce,'timestamp':1000+counter[0],
+                   'message':{'id':'msg-'+nonce,'type':'text','text':'request '+nonce}}
+            input_binding=adapter._input_lifecycle.accept(event,'U_test')
+            assert input_binding['accepted'] and adapter._input_lifecycle.begin_job(input_binding)
+            binding={'profile':str(home),'session_id':'session','session_key':'line:test','turn_id':turn,
+                     'input_id':input_binding['input_id'],'input_revision':input_binding['input_revision'],
+                     'input_sha256':input_binding['input_sha256']}
+            return {'chat_id':'U_test','message_id':turn,'binding':binding,'input_binding':input_binding,
+                    'delivery':'pending','reply_token':'token-'+turn,'reply_expires':time.time()+30,
                     'approval':{'binding':binding,'kind':'notice',
                                 'payload_sha256':plugin.digest(plugin.native._text_messages(plugin.NOTICE))}}
         first=state('first')

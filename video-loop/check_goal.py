@@ -159,7 +159,6 @@ def check_metered_authorization():
     with tempfile.TemporaryDirectory(prefix='ninax-authz-') as directory:
         root=Path(directory)
         state=root/'request.json'
-        receipt=recovery.authorization_path(state)
         posts=[]
         def fake_http(method,target,*args,**kwargs):
             if method=='POST':
@@ -169,30 +168,34 @@ def check_metered_authorization():
         bright.token=lambda:'fake-not-a-real-token'
         bright.http_json=fake_http
         # Absent authorization fails closed before any provider access.
-        assert recovery._metered_fetch(url,state,time.monotonic()+5,root)['reason']=='not_authorized'
-        assert not posts and not state.exists()
+        denied=recovery._metered_fetch(url,state,time.monotonic()+5,root)
+        assert denied['status']=='not_authorized' and denied['reason']=='metered_authorization_absent'
+        assert denied['metered_requests']==0 and not posts
         # Mismatched source binding fails closed.
-        recovery.authorize_metered_fetch('https://www.instagram.com/reel/OtherPost',state)
-        assert recovery._metered_fetch(url,state,time.monotonic()+5,root)['reason']=='authorization_mismatch'
+        recovery.authorize_metered_fetch(url,state,time.monotonic()+5)
+        doc=ev.read_json(state)
+        doc['authorization'].update(id='OtherPost',url='https://www.instagram.com/reel/OtherPost/')
+        ev.atomic_json(state,doc)
+        assert recovery._metered_fetch(url,state,time.monotonic()+5,root)['reason']=='metered_authorization_mismatch'
         assert not posts
         # Expired authorization fails closed.
-        recovery.authorize_metered_fetch(url,state,ttl_seconds=30)
-        doc=ev.read_json(receipt);doc['expires_at']=time.time()-1;ev.atomic_json(receipt,doc)
-        assert recovery._metered_fetch(url,state,time.monotonic()+5,root)['reason']=='authorization_expired'
+        recovery.authorize_metered_fetch(url,state,time.monotonic()+5,seconds=30)
+        doc=ev.read_json(state);doc['authorization']['expires_at']=time.time()-1;ev.atomic_json(state,doc)
+        assert recovery._metered_fetch(url,state,time.monotonic()+5,root)['reason']=='metered_authorization_expired'
         assert not posts
         # Consumed authorization fails closed.
-        doc['expires_at']=time.time()+300;doc['consumed']=True;ev.atomic_json(receipt,doc)
-        assert recovery._metered_fetch(url,state,time.monotonic()+5,root)['reason']=='authorization_consumed'
+        doc['authorization'].update(expires_at=time.time()+300,consumed=True);ev.atomic_json(state,doc)
+        assert recovery._metered_fetch(url,state,time.monotonic()+5,root)['reason']=='metered_authorization_consumed'
         assert not posts
         # A valid receipt permits exactly one submission and is consumed up front.
-        granted=recovery.authorize_metered_fetch(url,state,ttl_seconds=60,authorized_by='tester')
-        assert granted['ok'] and ev.read_json(receipt)['source']['id']==wanted['id']
+        granted=recovery.authorize_metered_fetch(url,state,time.monotonic()+5,seconds=60,authorized_by='tester')
+        assert granted['ok'] and granted['authorization']['id']==wanted['id']
         submitted=recovery._metered_fetch(url,state,time.monotonic()+4,root)
         assert len(posts)==1 and submitted['remote_task_id']=='s_auth'
-        assert submitted['status']=='pending' and submitted['metered_requests']==1
-        assert ev.read_json(receipt)['consumed'] is True
+        assert submitted['status']=='submitted' and submitted['metered_requests']==1
+        assert ev.read_json(state)['authorization']['consumed'] is True
         assert submitted['authorization']['authorized_by']=='tester'
-        # Resuming the pending task polls without a second POST even though the receipt is consumed.
+        # Resuming the submitted task polls without a second POST even though the grant is consumed.
         bright_calls=[0]
         real_http=fake_http
         def counting(method,target,*args,**kwargs):
@@ -202,14 +205,14 @@ def check_metered_authorization():
         resumed=recovery._metered_fetch(url,state,time.monotonic()+3,root)
         assert resumed['remote_task_id']=='s_auth' and bright_calls[0]>=1
         assert sum(1 for call in posts)==1
-        # A reset back to a new submission needs a fresh receipt: the consumed one must not re-arm.
+        # A reset back to a new submission needs a fresh grant: the consumed one must not re-arm.
         doc=ev.read_json(state);doc['status']='completed';doc['started_at']=time.time()-9999;ev.atomic_json(state,doc)
         bright_calls[0]=0
         again=recovery._metered_fetch(url,state,time.monotonic()+5,root)
-        assert again['reason']=='authorization_consumed' and bright_calls[0]==0
+        assert again['reason']=='metered_authorization_consumed' and bright_calls[0]==0
         # Response-unknown acceptance is durable: the stored task resumes, never resubmits.
         state2=root/'unknown-request.json'
-        recovery.authorize_metered_fetch(url,state2,ttl_seconds=60)
+        recovery.authorize_metered_fetch(url,state2,time.monotonic()+5,seconds=60)
         def flaky(method,target,*args,**kwargs):
             if method=='POST':
                 raise RuntimeError('connect_timeout')
@@ -220,15 +223,18 @@ def check_metered_authorization():
         bright.http_json=fake_http
         resumed2=recovery._metered_fetch(url,state2,time.monotonic()+3,root)
         assert resumed2.get('resumed') is True and resumed2['status']=='unknown'
-        # The kill-switch still wins over a valid receipt, before any provider access.
-        recovery.authorize_metered_fetch(url,root/'killed.json',ttl_seconds=60)
+        # The kill-switch still wins over a valid grant, before any provider access.
+        recovery.authorize_metered_fetch(url,root/'killed.json',time.monotonic()+5,seconds=60)
         with patch.dict(recovery.os.environ,{'NINAX_DISABLE_METERED_FETCH':'1'}),\
              patch.object(recovery,'_metered_fetch',side_effect=AssertionError('paid backend must not be called')):
             blocked=recovery.metered_fetch(url,root/'killed.json',time.monotonic()+5,root)
         assert blocked=={'ok':False,'reason':'metered_fetch_disabled'}
         # Grant path refuses unsupported sources instead of writing a receipt.
-        bad=recovery.authorize_metered_fetch('https://example.com/not-a-reel',root/'bad.json')
-        assert bad['reason']=='metered_source_not_supported' and not recovery.authorization_path(root/'bad.json').exists()
+        try:
+            recovery.authorize_metered_fetch('https://example.com/not-a-reel',root/'bad.json',time.monotonic()+5)
+            raise AssertionError('unsupported source must be refused')
+        except ValueError as exc:
+            assert str(exc)=='metered_source_not_supported' and not (root/'bad.json').exists()
 
 
 def check_long_review():
