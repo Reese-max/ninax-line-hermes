@@ -80,6 +80,15 @@ python -B video-loop/check_ci.py pipeline-windows --out "$env:TEMP/ninax-windows
 
 計費抓片需另有明確的單次授權，沿用一份 state 收據。授權由 `video_recovery.py --authorize <url> --state <receipt>` 寫入收據（省略 `--state` 時由 `--jobs-root` 推導 `.ninax-recovery/<digest>.json`；`--authorization-seconds` 設定效期，預設 600 秒）：授權綁定來源 platform+id、設有期限、僅單次有效，在 provider POST 前於收據內原子標記 `consumed` 並寫入 `status=starting`。授權缺席、逾期、已消耗、綁定其他來源或欄位不全時一律拒絕，收據記為 `status=not_authorized` 與原因（`metered_authorization_absent`/`consumed`/`mismatch`/`expired`/`invalid`）且 `metered_requests=0`；進行中或結果不明的提交（`starting`/`submitted`/`pending`/`unknown`）不得再授權，已接受任務記 `submitted`、回應不明記 `unknown`，兩者只輪詢既有遠端任務、不重送 POST。收據停在 `starting` 且無 `remote_task_id` 表示授權消耗後提交結果不明，須人工確認後才可刪除重建收據。`NINAX_DISABLE_METERED_FETCH=1` 仍為最先檢查的緊急停止開關，本身不是授權，設定期間也拒絕寫入新授權。Bright Data 的餘額查詢權限與擷取權限不同，不能把餘額 HTTP 403 判成擷取故障。Apify 未配置時列為 unavailable，不假裝完成備援。
 
+授權機制（2026-09-16 起強制）：`video_recovery.py --fetch` 在任何**新**的 provider POST 前，state 收據內必須存在一份綁定該來源 identity（platform+id）、未消費、未過期的單次授權 grant。授予方式（`--authorize-fetch`、`--ttl` 仍保留為 `--authorize`、`--authorization-seconds` 的相容別名）：
+
+```bash
+python video_recovery.py --authorize <url> --state <state.json> \
+    [--authorization-seconds 600] [--authorized-by <操作者>]
+```
+
+授權在 POST **之前**先於收據內標記 `consumed`——回應遺失不得重送。缺少授權、綁定不符、已消費或過期一律 fail closed（`status=not_authorized`，原因 `metered_authorization_absent`／`metered_authorization_mismatch`／`metered_authorization_consumed`／`metered_authorization_expired`／`metered_authorization_invalid`），不會接觸 provider。既有 submitted/pending/unknown 工作的續查不需要新授權（不重送 POST）；`NINAX_DISABLE_METERED_FETCH=1` 仍是最外層緊急停止開關。
+
 2026-09-08 稽核發現先前兩輪隔離短片測試在單次授權尚未取得時觸發 Bright Data，兩份任務均已完成，實際費用未知。已停止新增計費驗收並修正上述測試入口；完整紀錄保留於 `evidence/goal-verification.json`。此禁止開關套用於驗收工具，不變更既有正式機器人的供應商設定。
 
 目前的非同步擷取使用單一 URL 的 `input` 陣列物件；Bright Data 的[官方 Instagram 文件](https://brightdata.mintlify.app/products/scrapers/instagram/introduction)確認此 request body 可用於 `/trigger`。

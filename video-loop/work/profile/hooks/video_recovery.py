@@ -336,12 +336,13 @@ def metered_fetch(url, state_path, deadline, jobs_root):
         return _metered_fetch(url,state_path,deadline,jobs_root)
 
 
-def authorize_metered_fetch(url, state_path, deadline, seconds=600):
+def authorize_metered_fetch(url, state_path, deadline, seconds=600, authorized_by='operator'):
     """Record a positive one-shot authorization for this exact source in the receipt.
 
-    The grant binds the source identity, expires, and is consumed atomically
-    before any provider POST. An in-flight or ambiguous submission can never
-    be re-authorized, so an uncertain acceptance still cannot be retriggered.
+    The grant binds the source identity, expires, names its authorizer, and is
+    consumed atomically before any provider POST. An in-flight or ambiguous
+    submission can never be re-authorized, so an uncertain acceptance still
+    cannot be retriggered.
     """
     if os.environ.get('NINAX_DISABLE_METERED_FETCH')=='1':
         return {'ok':False,'reason':'metered_fetch_disabled'}
@@ -370,7 +371,8 @@ def authorize_metered_fetch(url, state_path, deadline, seconds=600):
         now = time.time()
         grant = {'platform': wanted['platform'], 'id': wanted['id'], 'url': wanted['url'],
                  'scope': 'single_metered_submission', 'authorized_at': now,
-                 'expires_at': now+max(1,seconds), 'consumed': False}
+                 'expires_at': now+max(1,seconds), 'consumed': False,
+                 'authorized_by': authorized_by}
         state.update(url=wanted['url'], authorization=grant)
         atomic_json(state_path, state)
         return {'ok': True, 'state': str(state_path), 'authorization': grant}
@@ -523,8 +525,10 @@ if __name__ == '__main__':
     parser.add_argument('--search')
     parser.add_argument('--resolve')
     parser.add_argument('--fetch')
-    parser.add_argument('--authorize')
-    parser.add_argument('--authorization-seconds', type=float, default=600)
+    parser.add_argument('--authorize', '--authorize-fetch', dest='authorize')
+    parser.add_argument('--authorization-seconds', '--ttl', dest='authorization_seconds',
+                        type=float, default=600)
+    parser.add_argument('--authorized-by', default='operator')
     parser.add_argument('--refresh')
     parser.add_argument('--visual-match',action='store_true')
     parser.add_argument('--job')
@@ -544,7 +548,8 @@ if __name__ == '__main__':
         elif args.authorize:
             result = authorize_metered_fetch(args.authorize,
                 _request_state_path(args.authorize, args.state, args.jobs_root),
-                time.monotonic()+min(15,args.seconds), args.authorization_seconds)
+                time.monotonic()+min(15,args.seconds), args.authorization_seconds,
+                authorized_by=args.authorized_by)
         else:
             result = metered_fetch(args.fetch,
                 _request_state_path(args.fetch, args.state, args.jobs_root),
