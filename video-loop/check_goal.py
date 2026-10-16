@@ -151,6 +151,7 @@ def check_recovery():
                 assert external['verification']['creator_verified'] is False
 
 
+@patch.dict(recovery.os.environ, {'NINAX_DISABLE_METERED_FETCH':'0'})
 def check_metered_authorization():
     """Positive one-shot authorization gates every new provider submission (#4)."""
     import brightdata_ig_fallback as bright
