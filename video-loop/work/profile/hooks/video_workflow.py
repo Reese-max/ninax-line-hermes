@@ -47,7 +47,8 @@ def execute(request):
     if reviewed['audit']['status'] != 'pass':
         reviewed['text'] = status_notice(doc['source'],doc['gaps'],reviewed.get('progress'))
     messages = payload(reviewed['text'])
-    binding = {k:request[k] for k in ('profile','session_id','session_key','turn_id')}
+    binding = {k:request[k] for k in ('profile','session_id','session_key','turn_id',
+                                      'input_id','input_revision','input_sha256') if k in request}
     binding.update(video=doc['source'], evidence_revision=doc['evidence_revision'],
                    requirement_revision=digest(reviewed['must_cover']))
     approval = {'binding':binding, 'payload_sha256':digest(messages),

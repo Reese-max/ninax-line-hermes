@@ -33,7 +33,7 @@ python video-loop/install.py --profile /srv/ninax/profile \
 python video-loop/install.py --rollback /srv/ninax/update-receipt.json
 ```
 
-安裝器拒絕未知 Hermes commit、核心差異、未記錄的 helper 修改與符號連結越界。所有舊檔的日期備份及 prepared 收據會先落盤，再更新檔案。回復先核對全部檔案及備份；有其他修改就拒絕還原。新檔移到帶日期的保留名稱，未完成的更新也能回復。再次安裝同一版應為零差異。
+安裝器拒絕未知 Hermes commit、核心差異、未記錄的 helper 修改與符號連結越界。安裝計畫包含 Hermes 的回合入口及支援 retry key 的原生 LINE adapter；兩者都核對固定來源或上一份收據。所有舊檔的日期備份及 prepared 收據會先落盤，再更新檔案。回復先核對全部檔案及備份；有其他修改就拒絕還原。新檔移到帶日期的保留名稱，未完成的更新也能回復。再次安裝同一版應為零差異。
 
 更新 LINE 外掛後，由既有 supervisor 對精確的 gateway PID 進行正常停止與重啟；不要啟動第二個 writer。原主機仍使用 `production_check.py` 檢查 guard、lease generation、正式 webhook 與 Bot 名稱。這些只證明服務連通，不能代替手機收件。
 
@@ -78,7 +78,7 @@ python -B video-loop/check_ci.py pipeline-windows --out "$env:TEMP/ninax-windows
 
 手機驗收需將影片連結送給 NINAX，確認收到重點、片尾及來源，再送「完整一點」；長片未完成時用「繼續摘要」。以正式回合／delivery 收據配對手機回報，不能只看 health 或 HTTP 200。
 
-計費抓片需另有明確的單次授權，沿用一份 state 收據；狀態 pending／unknown 不重送 POST。Bright Data 的餘額查詢權限與擷取權限不同，不能把餘額 HTTP 403 判成擷取故障。Apify 未配置時列為 unavailable，不假裝完成備援。
+計費抓片需另有明確的單次授權，沿用一份 state 收據。授權由 `video_recovery.py --authorize <url> --state <receipt>` 寫入收據（省略 `--state` 時由 `--jobs-root` 推導 `.ninax-recovery/<digest>.json`；`--authorization-seconds` 設定效期，預設 600 秒）：授權綁定來源 platform+id、設有期限、僅單次有效，在 provider POST 前於收據內原子標記 `consumed` 並寫入 `status=starting`。授權缺席、逾期、已消耗、綁定其他來源或欄位不全時一律拒絕，收據記為 `status=not_authorized` 與原因（`metered_authorization_absent`/`consumed`/`mismatch`/`expired`/`invalid`）且 `metered_requests=0`；進行中或結果不明的提交（`starting`/`submitted`/`pending`/`unknown`）不得再授權，已接受任務記 `submitted`、回應不明記 `unknown`，兩者只輪詢既有遠端任務、不重送 POST。收據停在 `starting` 且無 `remote_task_id` 表示授權消耗後提交結果不明，須人工確認後才可刪除重建收據。`NINAX_DISABLE_METERED_FETCH=1` 仍為最先檢查的緊急停止開關，本身不是授權，設定期間也拒絕寫入新授權。Bright Data 的餘額查詢權限與擷取權限不同，不能把餘額 HTTP 403 判成擷取故障。Apify 未配置時列為 unavailable，不假裝完成備援。
 
 2026-09-08 稽核發現先前兩輪隔離短片測試在單次授權尚未取得時觸發 Bright Data，兩份任務均已完成，實際費用未知。已停止新增計費驗收並修正上述測試入口；完整紀錄保留於 `evidence/goal-verification.json`。此禁止開關套用於驗收工具，不變更既有正式機器人的供應商設定。
 
