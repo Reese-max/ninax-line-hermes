@@ -1,0 +1,20 @@
+{
+  "repo": "Reese-max/ninax-line-hermes",
+  "issue": 11,
+  "base_sha": "5f8bbd5a9d3ca7d11f42ba5b46fea2d7702a9969",
+  "red_proof": [
+    "Before applying fixes, python -B -m pytest -p no:cacheprovider -q tests/test_quality_audits.py video-loop/test_custom_turn.py ran under Git Bash and exited 1: 5 failed, 4 passed, 1 skipped.",
+    "test_duplicate_round_numbers_are_rejected failed with DID NOT RAISE AssertionError: duplicate round 1 silently replaced the first report.",
+    "Both test_future_round_can_record_a_new_product_and_clean_status cases failed: a synthetic round 4 with a new 40-character product SHA and CLEAN 1/2 was rejected by the historical product SHA and NOT CLEAN assertions.",
+    "Both test_installed_gateway_import_failure_is_not_skipped cases (config and run_turn_runner) failed because importorskip converted the synthetic installed gateway's missing internal dependency into a skip."
+  ],
+  "test_command": "python -B -m pytest -p no:cacheprovider -q tests/test_quality_audits.py video-loop/test_custom_turn.py",
+  "test_exit": 0,
+  "tests_passed": 9,
+  "tests_failed": 0,
+  "summary": "Fixed all three self-review findings with five regression cases. The declared command passes under Git Bash (9 passed, 1 skipped because the optional pinned Hermes gateway package is absent); compileall and git diff --check also exit 0. Historical reports and product runtime behavior were preserved.",
+  "not_done": [
+    "Full repository pytest suite is unverified on this Windows host: the pre-fix baseline failed collection because plugins.platforms.line.adapter and the Linux-only fcntl module are unavailable.",
+    "The real pinned-Hermes custom-turn execution remains skipped; native Linux/Hermes contract checks, hosted CI and real LINE/phone acceptance were not run."
+  ]
+}
