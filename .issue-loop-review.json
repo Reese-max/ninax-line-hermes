@@ -1,0 +1,26 @@
+{
+  "pr": 11,
+  "head": "5f8bbd5a9d3ca7d11f42ba5b46fea2d7702a9969",
+  "findings": [
+    {
+      "severity": "med",
+      "file": "video-loop/test_custom_turn.py",
+      "line": 10,
+      "issue": "importorskip also skips an installed gateway whose submodule or transitive dependency is missing, so a broken Hermes contract check exits successfully. Skip only when the top-level gateway package is absent."
+    },
+    {
+      "severity": "med",
+      "file": "tests/test_quality_audits.py",
+      "line": 40,
+      "issue": "All future rounds must contain the old product SHA and the latest report must stay NOT CLEAN 0/2 with the old issue IDs. This rejects legitimate post-fix audits required by issue #5; scope the frozen assertions to the historical rounds."
+    },
+    {
+      "severity": "low",
+      "file": "tests/test_quality_audits.py",
+      "line": 19,
+      "issue": "Reports with the same round number overwrite each other in the dictionary, allowing an invalid report to escape every content check. Reject duplicate round numbers before assignment."
+    }
+  ],
+  "fixed": true,
+  "summary": "Fixed three test defects: installed Hermes import failures now fail, duplicate audit rounds are rejected, and historical SHA/status assertions no longer block future qualifying audits. Five regression cases failed before the fixes; the Git Bash test command now reports 9 passed and 1 expected skip, while the full suite remains unverified on this Windows host because its pre-fix collection lacks native Hermes plugins and fcntl."
+}
